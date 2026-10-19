@@ -1,0 +1,246 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+}
+
+model User {
+  id            Int                  @id @default(autoincrement())
+  name          String
+  username      String               @unique
+  phone         String?              @unique
+  passwordHash  String
+  role          UserRole
+  status        UserStatus           @default(ACTIVE)
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+  statusHistory OrderStatusHistory[]
+
+  @@index([role])
+  @@index([status])
+  @@map("users")
+}
+
+model Branch {
+  id        Int      @id @default(autoincrement())
+  name      String
+  code      String   @unique
+  address   String?
+  phone     String?
+  status    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  orders    Order[]
+
+  @@index([status])
+  @@map("branches")
+}
+
+model Metal {
+  id        Int      @id @default(autoincrement())
+  name      String
+  code      String   @unique
+  status    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  orders    Order[]
+
+  @@index([status])
+  @@map("metals")
+}
+
+model Category {
+  id        Int      @id @default(autoincrement())
+  name      String
+  code      String   @unique
+  status    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  orders    Order[]
+
+  @@index([status])
+  @@map("categories")
+}
+
+model RepairType {
+  id               Int               @id @default(autoincrement())
+  name             String
+  code             String            @unique
+  status           Boolean           @default(true)
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  orderRepairTypes OrderRepairType[]
+
+  @@index([status])
+  @@map("repair_types")
+}
+
+model Maker {
+  id             Int      @id @default(autoincrement())
+  name           String
+  phone          String?
+  whatsappNumber String?
+  specialization String?
+  status         Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  orders         Order[]
+
+  @@index([status])
+  @@index([whatsappNumber])
+  @@map("makers")
+}
+
+model Order {
+  id                           Int                  @id @default(autoincrement())
+  orderNumber                  String               @unique
+  branchId                     Int
+  customerName                 String
+  customerPhone                String
+  customerArea                 String
+  orderType                    OrderType
+  expectedDeliveryDate         DateTime
+  priority                     OrderPriority        @default(NORMAL)
+  advance                      Decimal?             @db.Decimal(12, 2)
+  estimate                     Decimal?             @db.Decimal(12, 2)
+  makerId                      Int?
+  status                       OrderStatus          @default(DRAFT)
+  metalId                      Int?
+  categoryId                   Int?
+  length                       Decimal?             @db.Decimal(10, 2)
+  lengthUnit                   LengthUnit?
+  size                         String?
+  weight                       Decimal?             @db.Decimal(10, 3)
+  purity                       Purity?
+  description                  String?
+  existingJewelleryDescription String?
+  problemDescription           String?
+  receivedItemDescription      String?
+  createdAt                    DateTime             @default(now())
+  updatedAt                    DateTime             @updatedAt
+  media                        OrderMedia[]
+  repairTypes                  OrderRepairType[]
+  statusHistory                OrderStatusHistory[]
+  branch                       Branch               @relation(fields: [branchId], references: [id])
+  category                     Category?            @relation(fields: [categoryId], references: [id])
+  maker                        Maker?               @relation(fields: [makerId], references: [id])
+  metal                        Metal?               @relation(fields: [metalId], references: [id])
+
+  @@index([branchId])
+  @@index([makerId])
+  @@index([metalId])
+  @@index([categoryId])
+  @@index([orderType])
+  @@index([status])
+  @@index([customerPhone])
+  @@index([expectedDeliveryDate])
+  @@map("orders")
+}
+
+model OrderStatusHistory {
+  id          Int          @id @default(autoincrement())
+  orderId     Int
+  fromStatus  OrderStatus?
+  toStatus    OrderStatus
+  changedById Int?
+  remarks     String?      @db.Text
+  createdAt   DateTime     @default(now())
+  changedBy   User?        @relation(fields: [changedById], references: [id])
+  order       Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId, createdAt])
+  @@index([changedById])
+  @@map("order_status_history")
+}
+
+model OrderRepairType {
+  id           Int        @id @default(autoincrement())
+  orderId      Int
+  repairTypeId Int
+  createdAt    DateTime   @default(now())
+  order        Order      @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  repairType   RepairType @relation(fields: [repairTypeId], references: [id])
+
+  @@unique([orderId, repairTypeId])
+  @@index([repairTypeId])
+  @@map("order_repair_types")
+}
+
+model OrderMedia {
+  id           Int          @id @default(autoincrement())
+  orderId      Int
+  mediaType    MediaType
+  mediaContext MediaContext @default(ORDER)
+  fileName     String?
+  fileUrl      String
+  storageKey   String?
+  mimeType     String?
+  fileSize     Int?
+  createdAt    DateTime     @default(now())
+  order        Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@index([mediaType])
+  @@index([mediaContext])
+  @@map("order_media")
+}
+
+enum UserRole {
+  SUPER_ADMIN
+  ADMIN
+  MANAGER
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum OrderType {
+  NEW
+  REPAIR
+}
+
+enum OrderPriority {
+  NORMAL
+  URGENT
+}
+
+enum OrderStatus {
+  DRAFT
+  NEW
+  ASSIGNED
+  IN_PROGRESS
+  COMPLETED
+  FINAL_CONFIRMED
+  DELIVERED
+  CLEANUP
+  ON_HOLD
+  CANCELLED
+}
+
+enum MediaType {
+  IMAGE
+  VIDEO
+  AUDIO
+}
+
+enum MediaContext {
+  ORDER
+  BEFORE_REPAIR
+  CUSTOMER_WHATSAPP
+  MAKER_WHATSAPP
+}
+
+enum LengthUnit {
+  INCH
+  CM
+}
+
+enum Purity {
+  K18
+  K22
+  K24
+}

@@ -135,6 +135,23 @@ app.get("/api/media-check", (req, res) => {
   });
 });
 
+
+app.get("/api/media-check/:filename", (req, res) => {
+  const filename = path.basename(req.params.filename);
+
+  const filePath = path.join(uploadsDirectory, "videos", filename);
+  const exists = fs.existsSync(filePath);
+
+  res.status(200).json({
+    success: true,
+    filename,
+    uploadsDirectory,
+    filePath,
+    exists,
+    size: exists ? fs.statSync(filePath).size : null,
+  });
+});
+
 // ========================================
 // HEALTH CHECK
 // ========================================

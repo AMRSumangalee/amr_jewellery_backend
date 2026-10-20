@@ -51,7 +51,16 @@ export const AnyNull = runtime.AnyNull
 
 
 export const ModelName = {
-  User: 'User'
+  User: 'User',
+  Branch: 'Branch',
+  Metal: 'Metal',
+  Category: 'Category',
+  RepairType: 'RepairType',
+  Maker: 'Maker',
+  Order: 'Order',
+  OrderStatusHistory: 'OrderStatusHistory',
+  OrderRepairType: 'OrderRepairType',
+  OrderMedia: 'OrderMedia'
 } as const
 
 export type ModelName = (typeof ModelName)[keyof typeof ModelName]
@@ -85,6 +94,141 @@ export const UserScalarFieldEnum = {
 export type UserScalarFieldEnum = (typeof UserScalarFieldEnum)[keyof typeof UserScalarFieldEnum]
 
 
+export const BranchScalarFieldEnum = {
+  id: 'id',
+  name: 'name',
+  code: 'code',
+  address: 'address',
+  phone: 'phone',
+  status: 'status',
+  createdAt: 'createdAt',
+  updatedAt: 'updatedAt'
+} as const
+
+export type BranchScalarFieldEnum = (typeof BranchScalarFieldEnum)[keyof typeof BranchScalarFieldEnum]
+
+
+export const MetalScalarFieldEnum = {
+  id: 'id',
+  name: 'name',
+  code: 'code',
+  status: 'status',
+  createdAt: 'createdAt',
+  updatedAt: 'updatedAt'
+} as const
+
+export type MetalScalarFieldEnum = (typeof MetalScalarFieldEnum)[keyof typeof MetalScalarFieldEnum]
+
+
+export const CategoryScalarFieldEnum = {
+  id: 'id',
+  name: 'name',
+  code: 'code',
+  status: 'status',
+  createdAt: 'createdAt',
+  updatedAt: 'updatedAt'
+} as const
+
+export type CategoryScalarFieldEnum = (typeof CategoryScalarFieldEnum)[keyof typeof CategoryScalarFieldEnum]
+
+
+export const RepairTypeScalarFieldEnum = {
+  id: 'id',
+  name: 'name',
+  code: 'code',
+  status: 'status',
+  createdAt: 'createdAt',
+  updatedAt: 'updatedAt'
+} as const
+
+export type RepairTypeScalarFieldEnum = (typeof RepairTypeScalarFieldEnum)[keyof typeof RepairTypeScalarFieldEnum]
+
+
+export const MakerScalarFieldEnum = {
+  id: 'id',
+  name: 'name',
+  phone: 'phone',
+  whatsappNumber: 'whatsappNumber',
+  specialization: 'specialization',
+  status: 'status',
+  createdAt: 'createdAt',
+  updatedAt: 'updatedAt'
+} as const
+
+export type MakerScalarFieldEnum = (typeof MakerScalarFieldEnum)[keyof typeof MakerScalarFieldEnum]
+
+
+export const OrderScalarFieldEnum = {
+  id: 'id',
+  orderNumber: 'orderNumber',
+  branchId: 'branchId',
+  customerName: 'customerName',
+  customerPhone: 'customerPhone',
+  customerArea: 'customerArea',
+  orderType: 'orderType',
+  expectedDeliveryDate: 'expectedDeliveryDate',
+  priority: 'priority',
+  advance: 'advance',
+  estimate: 'estimate',
+  makerId: 'makerId',
+  status: 'status',
+  metalId: 'metalId',
+  categoryId: 'categoryId',
+  length: 'length',
+  lengthUnit: 'lengthUnit',
+  size: 'size',
+  weight: 'weight',
+  purity: 'purity',
+  description: 'description',
+  existingJewelleryDescription: 'existingJewelleryDescription',
+  problemDescription: 'problemDescription',
+  receivedItemDescription: 'receivedItemDescription',
+  createdAt: 'createdAt',
+  updatedAt: 'updatedAt'
+} as const
+
+export type OrderScalarFieldEnum = (typeof OrderScalarFieldEnum)[keyof typeof OrderScalarFieldEnum]
+
+
+export const OrderStatusHistoryScalarFieldEnum = {
+  id: 'id',
+  orderId: 'orderId',
+  fromStatus: 'fromStatus',
+  toStatus: 'toStatus',
+  changedById: 'changedById',
+  remarks: 'remarks',
+  createdAt: 'createdAt'
+} as const
+
+export type OrderStatusHistoryScalarFieldEnum = (typeof OrderStatusHistoryScalarFieldEnum)[keyof typeof OrderStatusHistoryScalarFieldEnum]
+
+
+export const OrderRepairTypeScalarFieldEnum = {
+  id: 'id',
+  orderId: 'orderId',
+  repairTypeId: 'repairTypeId',
+  createdAt: 'createdAt'
+} as const
+
+export type OrderRepairTypeScalarFieldEnum = (typeof OrderRepairTypeScalarFieldEnum)[keyof typeof OrderRepairTypeScalarFieldEnum]
+
+
+export const OrderMediaScalarFieldEnum = {
+  id: 'id',
+  orderId: 'orderId',
+  mediaType: 'mediaType',
+  mediaContext: 'mediaContext',
+  fileName: 'fileName',
+  fileUrl: 'fileUrl',
+  storageKey: 'storageKey',
+  mimeType: 'mimeType',
+  fileSize: 'fileSize',
+  createdAt: 'createdAt'
+} as const
+
+export type OrderMediaScalarFieldEnum = (typeof OrderMediaScalarFieldEnum)[keyof typeof OrderMediaScalarFieldEnum]
+
+
 export const SortOrder = {
   asc: 'asc',
   desc: 'desc'
@@ -109,4 +253,80 @@ export const UserOrderByRelevanceFieldEnum = {
 } as const
 
 export type UserOrderByRelevanceFieldEnum = (typeof UserOrderByRelevanceFieldEnum)[keyof typeof UserOrderByRelevanceFieldEnum]
+
+
+export const BranchOrderByRelevanceFieldEnum = {
+  name: 'name',
+  code: 'code',
+  address: 'address',
+  phone: 'phone'
+} as const
+
+export type BranchOrderByRelevanceFieldEnum = (typeof BranchOrderByRelevanceFieldEnum)[keyof typeof BranchOrderByRelevanceFieldEnum]
+
+
+export const MetalOrderByRelevanceFieldEnum = {
+  name: 'name',
+  code: 'code'
+} as const
+
+export type MetalOrderByRelevanceFieldEnum = (typeof MetalOrderByRelevanceFieldEnum)[keyof typeof MetalOrderByRelevanceFieldEnum]
+
+
+export const CategoryOrderByRelevanceFieldEnum = {
+  name: 'name',
+  code: 'code'
+} as const
+
+export type CategoryOrderByRelevanceFieldEnum = (typeof CategoryOrderByRelevanceFieldEnum)[keyof typeof CategoryOrderByRelevanceFieldEnum]
+
+
+export const RepairTypeOrderByRelevanceFieldEnum = {
+  name: 'name',
+  code: 'code'
+} as const
+
+export type RepairTypeOrderByRelevanceFieldEnum = (typeof RepairTypeOrderByRelevanceFieldEnum)[keyof typeof RepairTypeOrderByRelevanceFieldEnum]
+
+
+export const MakerOrderByRelevanceFieldEnum = {
+  name: 'name',
+  phone: 'phone',
+  whatsappNumber: 'whatsappNumber',
+  specialization: 'specialization'
+} as const
+
+export type MakerOrderByRelevanceFieldEnum = (typeof MakerOrderByRelevanceFieldEnum)[keyof typeof MakerOrderByRelevanceFieldEnum]
+
+
+export const OrderOrderByRelevanceFieldEnum = {
+  orderNumber: 'orderNumber',
+  customerName: 'customerName',
+  customerPhone: 'customerPhone',
+  customerArea: 'customerArea',
+  size: 'size',
+  description: 'description',
+  existingJewelleryDescription: 'existingJewelleryDescription',
+  problemDescription: 'problemDescription',
+  receivedItemDescription: 'receivedItemDescription'
+} as const
+
+export type OrderOrderByRelevanceFieldEnum = (typeof OrderOrderByRelevanceFieldEnum)[keyof typeof OrderOrderByRelevanceFieldEnum]
+
+
+export const OrderStatusHistoryOrderByRelevanceFieldEnum = {
+  remarks: 'remarks'
+} as const
+
+export type OrderStatusHistoryOrderByRelevanceFieldEnum = (typeof OrderStatusHistoryOrderByRelevanceFieldEnum)[keyof typeof OrderStatusHistoryOrderByRelevanceFieldEnum]
+
+
+export const OrderMediaOrderByRelevanceFieldEnum = {
+  fileName: 'fileName',
+  fileUrl: 'fileUrl',
+  storageKey: 'storageKey',
+  mimeType: 'mimeType'
+} as const
+
+export type OrderMediaOrderByRelevanceFieldEnum = (typeof OrderMediaOrderByRelevanceFieldEnum)[keyof typeof OrderMediaOrderByRelevanceFieldEnum]
 

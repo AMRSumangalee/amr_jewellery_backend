@@ -46,3 +46,48 @@ export { Prisma }
  * 
  */
 export type User = Prisma.UserModel
+/**
+ * Model Branch
+ * 
+ */
+export type Branch = Prisma.BranchModel
+/**
+ * Model Metal
+ * 
+ */
+export type Metal = Prisma.MetalModel
+/**
+ * Model Category
+ * 
+ */
+export type Category = Prisma.CategoryModel
+/**
+ * Model RepairType
+ * 
+ */
+export type RepairType = Prisma.RepairTypeModel
+/**
+ * Model Maker
+ * 
+ */
+export type Maker = Prisma.MakerModel
+/**
+ * Model Order
+ * 
+ */
+export type Order = Prisma.OrderModel
+/**
+ * Model OrderStatusHistory
+ * 
+ */
+export type OrderStatusHistory = Prisma.OrderStatusHistoryModel
+/**
+ * Model OrderRepairType
+ * 
+ */
+export type OrderRepairType = Prisma.OrderRepairTypeModel
+/**
+ * Model OrderMedia
+ * 
+ */
+export type OrderMedia = Prisma.OrderMediaModel

@@ -24,3 +24,71 @@ export const UserStatus = {
 } as const
 
 export type UserStatus = (typeof UserStatus)[keyof typeof UserStatus]
+
+
+export const OrderType = {
+  NEW: 'NEW',
+  REPAIR: 'REPAIR'
+} as const
+
+export type OrderType = (typeof OrderType)[keyof typeof OrderType]
+
+
+export const OrderPriority = {
+  NORMAL: 'NORMAL',
+  URGENT: 'URGENT'
+} as const
+
+export type OrderPriority = (typeof OrderPriority)[keyof typeof OrderPriority]
+
+
+export const OrderStatus = {
+  DRAFT: 'DRAFT',
+  NEW: 'NEW',
+  ASSIGNED: 'ASSIGNED',
+  IN_PROGRESS: 'IN_PROGRESS',
+  COMPLETED: 'COMPLETED',
+  FINAL_CONFIRMED: 'FINAL_CONFIRMED',
+  DELIVERED: 'DELIVERED',
+  CLEANUP: 'CLEANUP',
+  ON_HOLD: 'ON_HOLD',
+  CANCELLED: 'CANCELLED'
+} as const
+
+export type OrderStatus = (typeof OrderStatus)[keyof typeof OrderStatus]
+
+
+export const MediaType = {
+  IMAGE: 'IMAGE',
+  VIDEO: 'VIDEO',
+  AUDIO: 'AUDIO'
+} as const
+
+export type MediaType = (typeof MediaType)[keyof typeof MediaType]
+
+
+export const MediaContext = {
+  ORDER: 'ORDER',
+  BEFORE_REPAIR: 'BEFORE_REPAIR',
+  CUSTOMER_WHATSAPP: 'CUSTOMER_WHATSAPP',
+  MAKER_WHATSAPP: 'MAKER_WHATSAPP'
+} as const
+
+export type MediaContext = (typeof MediaContext)[keyof typeof MediaContext]
+
+
+export const LengthUnit = {
+  INCH: 'INCH',
+  CM: 'CM'
+} as const
+
+export type LengthUnit = (typeof LengthUnit)[keyof typeof LengthUnit]
+
+
+export const Purity = {
+  K18: 'K18',
+  K22: 'K22',
+  K24: 'K24'
+} as const
+
+export type Purity = (typeof Purity)[keyof typeof Purity]

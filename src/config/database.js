@@ -1,3 +1,4 @@
+
 import "dotenv/config";
 
 import { PrismaClient } from "../generated/prisma/client.ts";
@@ -15,5 +16,21 @@ const adapter = new PrismaMariaDb({
 const prisma = new PrismaClient({
   adapter,
 });
+
+// Temporary database diagnostic test
+export async function testDatabase() {
+  try {
+    // Test basic MySQL query
+    const result = await prisma.$queryRaw`SELECT 1 AS test`;
+    console.log("✅ DATABASE QUERY TEST:", result);
+
+    // Test Prisma User model and users table
+    const userCount = await prisma.user.count();
+    console.log("✅ USERS TABLE COUNT:", userCount);
+  } catch (error) {
+    console.error("❌ DATABASE QUERY TEST FAILED:", error);
+    throw error;
+  }
+}
 
 export default prisma;

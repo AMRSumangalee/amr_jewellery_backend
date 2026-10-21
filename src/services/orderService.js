@@ -31,11 +31,11 @@ const normalizePurity = (value) => {
 
   const purityMap = {
     "18K": "K18",
-    "K18": "K18",
+    K18: "K18",
     "22K": "K22",
-    "K22": "K22",
+    K22: "K22",
     "24K": "K24",
-    "K24": "K24",
+    K24: "K24",
   };
 
   if (!purityMap[purity]) {
@@ -48,17 +48,9 @@ const normalizePurity = (value) => {
 const getMediaType = (mimeType) => {
   const mime = mimeType?.toLowerCase() || "";
 
-  if (mime.startsWith("image/")) {
-    return "IMAGE";
-  }
-
-  if (mime.startsWith("video/")) {
-    return "VIDEO";
-  }
-
-  if (mime.startsWith("audio/")) {
-    return "AUDIO";
-  }
+  if (mime.startsWith("image/")) return "IMAGE";
+  if (mime.startsWith("video/")) return "VIDEO";
+  if (mime.startsWith("audio/")) return "AUDIO";
 
   throw new Error(`Unsupported media type: ${mimeType}`);
 };
@@ -85,17 +77,31 @@ const getFileUrl = (file) => {
   return `/${relativePath}`;
 };
 
+const toNumberOrNull = (value) =>
+  value !== undefined && value !== null && value !== ""
+    ? Number(value)
+    : null;
+
+const ORDER_INCLUDE = {
+  branch: true,
+  metal: true,
+  category: true,
+  maker: true,
+  repairTypes: {
+    include: {
+      repairType: true,
+    },
+  },
+  media: true,
+};
+
 // Used by the controller to remove uploaded files when a request fails
 export const cleanupUploadedFiles = async (files = []) => {
   for (const file of files) {
     try {
       await fs.unlink(file.path);
     } catch (error) {
-      console.error(
-        "FILE CLEANUP ERROR:",
-        file.path,
-        error.message
-      );
+      console.error("FILE CLEANUP ERROR:", file.path, error.message);
     }
   }
 };
@@ -105,6 +111,8 @@ export const cleanupUploadedFiles = async (files = []) => {
 // ============================================================
 
 export const createOrder = async (data, files = []) => {
+  const t0 = Date.now();
+
   const {
     branchId,
     customerName,
@@ -138,29 +146,15 @@ export const createOrder = async (data, files = []) => {
     repairTypeIds,
   } = data;
 
-  // ==========================================================
-  // BASIC VALIDATION
-  // ==========================================================
+  // ----------------------------------------------------------
+  // BASIC VALIDATION (no DB)
+  // ----------------------------------------------------------
 
-  if (!branchId) {
-    throw new Error("Branch is required");
-  }
-
-  if (!customerName?.trim()) {
-    throw new Error("Customer name is required");
-  }
-
-  if (!customerPhone?.trim()) {
-    throw new Error("Customer phone is required");
-  }
-
-  if (!customerArea?.trim()) {
-    throw new Error("Customer area is required");
-  }
-
-  if (!orderType) {
-    throw new Error("Order type is required");
-  }
+  if (!branchId) throw new Error("Branch is required");
+  if (!customerName?.trim()) throw new Error("Customer name is required");
+  if (!customerPhone?.trim()) throw new Error("Customer phone is required");
+  if (!customerArea?.trim()) throw new Error("Customer area is required");
+  if (!orderType) throw new Error("Order type is required");
 
   if (!["NEW", "REPAIR"].includes(orderType)) {
     throw new Error("Invalid order type");
@@ -170,16 +164,13 @@ export const createOrder = async (data, files = []) => {
     throw new Error("Expected delivery date is required");
   }
 
-  // ==========================================================
-  // MEDIA VALIDATION
-  // ==========================================================
+  const imageMissingMessage =
+    orderType === "NEW"
+      ? "At least one image is required for new order"
+      : "At least one before-repair image is required for repair order";
 
   if (!files || files.length === 0) {
-    throw new Error(
-      orderType === "NEW"
-        ? "At least one image is required for new order"
-        : "At least one before-repair image is required for repair order"
-    );
+    throw new Error(imageMissingMessage);
   }
 
   const imageFiles = files.filter((file) =>
@@ -187,317 +178,174 @@ export const createOrder = async (data, files = []) => {
   );
 
   if (imageFiles.length === 0) {
-    throw new Error(
-      orderType === "NEW"
-        ? "At least one image is required for new order"
-        : "At least one before-repair image is required for repair order"
-    );
+    throw new Error(imageMissingMessage);
   }
-
-  // ==========================================================
-  // NEW ORDER VALIDATION
-  // ==========================================================
 
   if (orderType === "NEW") {
-    if (!metalId) {
-      throw new Error("Metal is required for new order");
-    }
-
-    if (!categoryId) {
-      throw new Error("Category is required for new order");
-    }
+    if (!metalId) throw new Error("Metal is required for new order");
+    if (!categoryId) throw new Error("Category is required for new order");
   }
 
-  // ==========================================================
-  // REPAIR ORDER VALIDATION
-  // ==========================================================
+  let uniqueRepairTypeIds = [];
 
   if (orderType === "REPAIR") {
-    if (
-      !Array.isArray(repairTypeIds) ||
-      repairTypeIds.length === 0
-    ) {
-      throw new Error(
-        "At least one repair type is required"
-      );
+    if (!Array.isArray(repairTypeIds) || repairTypeIds.length === 0) {
+      throw new Error("At least one repair type is required");
     }
 
     if (!existingJewelleryDescription?.trim()) {
-      throw new Error(
-        "Existing jewellery description is required"
-      );
+      throw new Error("Existing jewellery description is required");
     }
 
     if (!problemDescription?.trim()) {
-      throw new Error(
-        "Problem / repair description is required"
-      );
+      throw new Error("Problem / repair description is required");
     }
-  }
 
-  // ==========================================================
-  // NORMALIZE ENUM VALUES (validates before DB work)
-  // ==========================================================
+    uniqueRepairTypeIds = [
+      ...new Set(repairTypeIds.map((id) => Number(id))),
+    ];
+  }
 
   const finalLengthUnit = normalizeLengthUnit(lengthUnit);
   const finalPurity = normalizePurity(purity);
 
-  // ==========================================================
-  // VERIFY BRANCH
-  // ==========================================================
+  // ----------------------------------------------------------
+  // PARALLEL DB VERIFICATION
+  // ----------------------------------------------------------
 
-  const branch = await prisma.branch.findFirst({
-    where: {
-      id: Number(branchId),
-      status: true,
-    },
-  });
+  const [branch, metal, category, maker, repairTypes] =
+    await Promise.all([
+      prisma.branch.findFirst({
+        where: { id: Number(branchId), status: true },
+      }),
 
-  if (!branch) {
-    throw new Error("Active branch not found");
+      metalId
+        ? prisma.metal.findFirst({
+            where: { id: Number(metalId), status: true },
+          })
+        : null,
+
+      categoryId
+        ? prisma.category.findFirst({
+            where: { id: Number(categoryId), status: true },
+          })
+        : null,
+
+      makerId
+        ? prisma.maker.findFirst({
+            where: { id: Number(makerId), status: true },
+          })
+        : null,
+
+      orderType === "REPAIR"
+        ? prisma.repairType.findMany({
+            where: { id: { in: uniqueRepairTypeIds }, status: true },
+          })
+        : [],
+    ]);
+
+  if (!branch) throw new Error("Active branch not found");
+  if (metalId && !metal) throw new Error("Active metal not found");
+  if (categoryId && !category) throw new Error("Active category not found");
+  if (makerId && !maker) throw new Error("Active maker not found");
+
+  if (
+    orderType === "REPAIR" &&
+    repairTypes.length !== uniqueRepairTypeIds.length
+  ) {
+    throw new Error("One or more repair types are invalid");
   }
 
-  // ==========================================================
-  // VERIFY METAL
-  // ==========================================================
+  console.log("CREATE ORDER VALIDATION ms =>", Date.now() - t0);
 
-  let metal = null;
-
-  if (metalId) {
-    metal = await prisma.metal.findFirst({
-      where: {
-        id: Number(metalId),
-        status: true,
-      },
-    });
-
-    if (!metal) {
-      throw new Error("Active metal not found");
-    }
-  }
-
-  // ==========================================================
-  // VERIFY CATEGORY
-  // ==========================================================
-
-  let category = null;
-
-  if (categoryId) {
-    category = await prisma.category.findFirst({
-      where: {
-        id: Number(categoryId),
-        status: true,
-      },
-    });
-
-    if (!category) {
-      throw new Error("Active category not found");
-    }
-  }
-
-  // ==========================================================
-  // VERIFY MAKER
-  // ==========================================================
-
-  let maker = null;
-
-  if (makerId) {
-    maker = await prisma.maker.findFirst({
-      where: {
-        id: Number(makerId),
-        status: true,
-      },
-    });
-
-    if (!maker) {
-      throw new Error("Active maker not found");
-    }
-  }
-
-  // ==========================================================
-  // VERIFY REPAIR TYPES
-  // ==========================================================
-
-  let repairTypes = [];
-
-  if (orderType === "REPAIR") {
-    const uniqueRepairTypeIds = [
-      ...new Set(
-        repairTypeIds.map((id) => Number(id))
-      ),
-    ];
-
-    repairTypes = await prisma.repairType.findMany({
-      where: {
-        id: {
-          in: uniqueRepairTypeIds,
-        },
-        status: true,
-      },
-    });
-
-    if (
-      repairTypes.length !==
-      uniqueRepairTypeIds.length
-    ) {
-      throw new Error(
-        "One or more repair types are invalid"
-      );
-    }
-  }
-
-  // ==========================================================
-  // ORDER NUMBER
-  // ==========================================================
-
+  // Generated after validation so failed requests never use a number
   const orderNumber = await generateOrderNumber();
 
-  // ==========================================================
-  // PREPARE MEDIA
-  // ==========================================================
+  // ----------------------------------------------------------
+  // MEDIA
+  // ----------------------------------------------------------
 
   const mediaData = files.map((file) => {
     const mediaType = getMediaType(file.mimetype);
 
-    const mediaContext = getMediaContext(
-      orderType,
-      mediaType
-    );
-
     return {
       mediaType,
-      mediaContext,
-
+      mediaContext: getMediaContext(orderType, mediaType),
       fileName: file.originalname,
-
       fileUrl: getFileUrl(file),
-
       storageKey: file.filename,
-
       mimeType: file.mimetype,
-
       fileSize: file.size,
     };
   });
 
-  // ==========================================================
-  // DATABASE TRANSACTION
-  // (file cleanup on failure is handled by the controller)
-  // ==========================================================
+  // ----------------------------------------------------------
+  // CREATE (single call, nested writes are already atomic)
+  // ----------------------------------------------------------
 
-  const order = await prisma.$transaction(async (tx) => {
-    return await tx.order.create({
-      data: {
-        orderNumber,
+  const order = await prisma.order.create({
+    data: {
+      orderNumber,
 
-        branchId: Number(branchId),
+      branchId: Number(branchId),
 
-        customerName: customerName.trim(),
-        customerPhone: customerPhone.trim(),
-        customerArea: customerArea.trim(),
+      customerName: customerName.trim(),
+      customerPhone: customerPhone.trim(),
+      customerArea: customerArea.trim(),
 
-        orderType,
+      orderType,
 
-        expectedDeliveryDate: new Date(expectedDeliveryDate),
+      expectedDeliveryDate: new Date(expectedDeliveryDate),
+      priority: priority === "URGENT" ? "URGENT" : "NORMAL",
 
-        priority: priority === "URGENT" ? "URGENT" : "NORMAL",
+      advance: toNumberOrNull(advance),
+      estimate: toNumberOrNull(estimate),
 
-        advance:
-          advance !== undefined &&
-            advance !== null &&
-            advance !== ""
-            ? Number(advance)
-            : null,
+      makerId: makerId ? Number(makerId) : null,
 
-        estimate:
-          estimate !== undefined &&
-            estimate !== null &&
-            estimate !== ""
-            ? Number(estimate)
-            : null,
+      status: "NEW",
 
-        makerId: makerId ? Number(makerId) : null,
+      metalId: metalId ? Number(metalId) : null,
+      categoryId: categoryId ? Number(categoryId) : null,
 
-        status: "NEW",
+      length: toNumberOrNull(length),
+      lengthUnit: finalLengthUnit,
 
-        metalId: metalId ? Number(metalId) : null,
+      size:
+        size !== undefined && size !== null && size !== ""
+          ? String(size)
+          : null,
 
-        categoryId: categoryId ? Number(categoryId) : null,
+      weight: toNumberOrNull(weight),
+      purity: finalPurity,
 
-        length:
-          length !== undefined &&
-            length !== null &&
-            length !== ""
-            ? Number(length)
-            : null,
+      description: description?.trim() || null,
 
-        lengthUnit: finalLengthUnit,
+      existingJewelleryDescription:
+        existingJewelleryDescription?.trim() || null,
 
-        size:
-          size !== undefined &&
-            size !== null &&
-            size !== ""
-            ? String(size)
-            : null,
+      problemDescription: problemDescription?.trim() || null,
 
-        weight:
-          weight !== undefined &&
-            weight !== null &&
-            weight !== ""
-            ? Number(weight)
-            : null,
+      receivedItemDescription: receivedItemDescription?.trim() || null,
 
-        purity: finalPurity,
+      media: {
+        create: mediaData,
+      },
 
-        description: description?.trim() || null,
-
-        existingJewelleryDescription:
-          existingJewelleryDescription?.trim() || null,
-
-        problemDescription:
-          problemDescription?.trim() || null,
-
-        receivedItemDescription:
-          receivedItemDescription?.trim() || null,
-
-        // ------------------------------------------------------
-        // MEDIA
-        // ------------------------------------------------------
-
-        media: {
-          create: mediaData,
-        },
-
-        // ------------------------------------------------------
-        // REPAIR TYPES
-        // ------------------------------------------------------
-
-        repairTypes:
-          orderType === "REPAIR"
-            ? {
+      repairTypes:
+        orderType === "REPAIR"
+          ? {
               create: repairTypes.map((repairType) => ({
                 repairTypeId: repairType.id,
               })),
             }
-            : undefined,
-      },
+          : undefined,
+    },
 
-      include: {
-        branch: true,
-        metal: true,
-        category: true,
-        maker: true,
-
-        repairTypes: {
-          include: {
-            repairType: true,
-          },
-        },
-
-        media: true,
-      },
-    });
+    include: ORDER_INCLUDE,
   });
+
+  console.log("CREATE ORDER TOTAL ms =>", Date.now() - t0);
 
   return order;
 };
@@ -516,20 +364,12 @@ export const getOrders = async ({
   priority,
 }) => {
   const currentPage = Math.max(Number(page) || 1, 1);
-  const currentLimit = Math.min(
-    Math.max(Number(limit) || 10, 1),
-    100
-  );
+  const currentLimit = Math.min(Math.max(Number(limit) || 10, 1), 100);
 
   const skip = (currentPage - 1) * currentLimit;
 
-  // ==========================================================
-  // WHERE CONDITION
-  // ==========================================================
-
   const where = {};
 
-  // Order Type
   if (orderType) {
     if (!["NEW", "REPAIR"].includes(orderType)) {
       throw new Error("Invalid order type");
@@ -538,7 +378,6 @@ export const getOrders = async ({
     where.orderType = orderType;
   }
 
-  // Status
   if (status) {
     const allowedStatuses = [
       "DRAFT",
@@ -560,12 +399,10 @@ export const getOrders = async ({
     where.status = status;
   }
 
-  // Branch
   if (branchId) {
     where.branchId = Number(branchId);
   }
 
-  // Priority
   if (priority) {
     if (!["NORMAL", "URGENT"].includes(priority)) {
       throw new Error("Invalid priority");
@@ -574,73 +411,28 @@ export const getOrders = async ({
     where.priority = priority;
   }
 
-  // Search
   if (search?.trim()) {
     const searchText = search.trim();
 
     where.OR = [
-      {
-        orderNumber: {
-          contains: searchText,
-        },
-      },
-      {
-        customerName: {
-          contains: searchText,
-        },
-      },
-      {
-        customerPhone: {
-          contains: searchText,
-        },
-      },
-      {
-        customerArea: {
-          contains: searchText,
-        },
-      },
+      { orderNumber: { contains: searchText } },
+      { customerName: { contains: searchText } },
+      { customerPhone: { contains: searchText } },
+      { customerArea: { contains: searchText } },
     ];
   }
-
-  // ==========================================================
-  // FETCH DATA + TOTAL
-  // ==========================================================
 
   const [orders, total] = await prisma.$transaction([
     prisma.order.findMany({
       where,
-
       skip,
       take: currentLimit,
-
-      orderBy: {
-        id: "desc",
-      },
-
-      include: {
-        branch: true,
-        metal: true,
-        category: true,
-        maker: true,
-
-        repairTypes: {
-          include: {
-            repairType: true,
-          },
-        },
-
-        media: true,
-      },
+      orderBy: { id: "desc" },
+      include: ORDER_INCLUDE,
     }),
 
-    prisma.order.count({
-      where,
-    }),
+    prisma.order.count({ where }),
   ]);
-
-  // ==========================================================
-  // PAGINATION
-  // ==========================================================
 
   const totalPages = Math.ceil(total / currentLimit);
 
@@ -667,24 +459,8 @@ export const getOrderById = async (orderId) => {
   }
 
   const order = await prisma.order.findUnique({
-    where: {
-      id,
-    },
-
-    include: {
-      branch: true,
-      metal: true,
-      category: true,
-      maker: true,
-
-      repairTypes: {
-        include: {
-          repairType: true,
-        },
-      },
-
-      media: true,
-    },
+    where: { id },
+    include: ORDER_INCLUDE,
   });
 
   if (!order) {
@@ -698,25 +474,17 @@ export const getOrderById = async (orderId) => {
 // UPDATE ORDER
 // ============================================================
 
-export const updateOrder = async (
-  orderId,
-  data,
-  files = []
-) => {
+export const updateOrder = async (orderId, data, files = []) => {
+  const t0 = Date.now();
+
   const id = Number(orderId);
 
   if (!id || Number.isNaN(id)) {
     throw new Error("Invalid order ID");
   }
 
-  // ==========================================================
-  // FIND EXISTING ORDER
-  // ==========================================================
-
   const existingOrder = await prisma.order.findUnique({
-    where: {
-      id,
-    },
+    where: { id },
     include: {
       media: true,
       repairTypes: true,
@@ -726,10 +494,6 @@ export const updateOrder = async (
   if (!existingOrder) {
     throw new Error("Order not found");
   }
-
-  // ==========================================================
-  // GET DATA
-  // ==========================================================
 
   const {
     branchId,
@@ -764,9 +528,9 @@ export const updateOrder = async (
     repairTypeIds,
   } = data;
 
-  // ==========================================================
-  // BASIC VALIDATION
-  // ==========================================================
+  // ----------------------------------------------------------
+  // FINAL VALUES + VALIDATION (no DB)
+  // ----------------------------------------------------------
 
   const finalOrderType = orderType || existingOrder.orderType;
 
@@ -775,9 +539,7 @@ export const updateOrder = async (
   }
 
   const finalBranchId =
-    branchId !== undefined
-      ? Number(branchId)
-      : existingOrder.branchId;
+    branchId !== undefined ? Number(branchId) : existingOrder.branchId;
 
   const finalCustomerName =
     customerName !== undefined
@@ -799,29 +561,13 @@ export const updateOrder = async (
       ? expectedDeliveryDate
       : existingOrder.expectedDeliveryDate;
 
-  if (!finalBranchId) {
-    throw new Error("Branch is required");
-  }
-
-  if (!finalCustomerName) {
-    throw new Error("Customer name is required");
-  }
-
-  if (!finalCustomerPhone) {
-    throw new Error("Customer phone is required");
-  }
-
-  if (!finalCustomerArea) {
-    throw new Error("Customer area is required");
-  }
-
+  if (!finalBranchId) throw new Error("Branch is required");
+  if (!finalCustomerName) throw new Error("Customer name is required");
+  if (!finalCustomerPhone) throw new Error("Customer phone is required");
+  if (!finalCustomerArea) throw new Error("Customer area is required");
   if (!finalDeliveryDate) {
     throw new Error("Expected delivery date is required");
   }
-
-  // ==========================================================
-  // NORMALIZE ENUM VALUES
-  // ==========================================================
 
   const finalLengthUnit =
     lengthUnit !== undefined
@@ -829,28 +575,7 @@ export const updateOrder = async (
       : existingOrder.lengthUnit;
 
   const finalPurity =
-    purity !== undefined
-      ? normalizePurity(purity)
-      : existingOrder.purity;
-
-  // ==========================================================
-  // VERIFY BRANCH
-  // ==========================================================
-
-  const branch = await prisma.branch.findFirst({
-    where: {
-      id: finalBranchId,
-      status: true,
-    },
-  });
-
-  if (!branch) {
-    throw new Error("Active branch not found");
-  }
-
-  // ==========================================================
-  // FINAL METAL / CATEGORY
-  // ==========================================================
+    purity !== undefined ? normalizePurity(purity) : existingOrder.purity;
 
   const finalMetalId =
     metalId !== undefined
@@ -866,9 +591,12 @@ export const updateOrder = async (
         : null
       : existingOrder.categoryId;
 
-  // ==========================================================
-  // NEW ORDER VALIDATION
-  // ==========================================================
+  const finalMakerId =
+    makerId !== undefined
+      ? makerId
+        ? Number(makerId)
+        : null
+      : existingOrder.makerId;
 
   if (finalOrderType === "NEW") {
     if (!finalMetalId) {
@@ -880,91 +608,16 @@ export const updateOrder = async (
     }
   }
 
-  // ==========================================================
-  // VERIFY METAL
-  // ==========================================================
-
-  let metal = null;
-
-  if (finalMetalId) {
-    metal = await prisma.metal.findFirst({
-      where: {
-        id: finalMetalId,
-        status: true,
-      },
-    });
-
-    if (!metal) {
-      throw new Error("Active metal not found");
-    }
-  }
-
-  // ==========================================================
-  // VERIFY CATEGORY
-  // ==========================================================
-
-  let category = null;
-
-  if (finalCategoryId) {
-    category = await prisma.category.findFirst({
-      where: {
-        id: finalCategoryId,
-        status: true,
-      },
-    });
-
-    if (!category) {
-      throw new Error("Active category not found");
-    }
-  }
-
-  // ==========================================================
-  // MAKER
-  // ==========================================================
-
-  const finalMakerId =
-    makerId !== undefined
-      ? makerId
-        ? Number(makerId)
-        : null
-      : existingOrder.makerId;
-
-  let maker = null;
-
-  if (finalMakerId) {
-    maker = await prisma.maker.findFirst({
-      where: {
-        id: finalMakerId,
-        status: true,
-      },
-    });
-
-    if (!maker) {
-      throw new Error("Active maker not found");
-    }
-  }
-
-  // ==========================================================
-  // REPAIR VALIDATION
-  // ==========================================================
-
   let finalRepairTypeIds = [];
 
   if (finalOrderType === "REPAIR") {
     if (repairTypeIds !== undefined) {
-      if (
-        !Array.isArray(repairTypeIds) ||
-        repairTypeIds.length === 0
-      ) {
-        throw new Error(
-          "At least one repair type is required"
-        );
+      if (!Array.isArray(repairTypeIds) || repairTypeIds.length === 0) {
+        throw new Error("At least one repair type is required");
       }
 
       finalRepairTypeIds = [
-        ...new Set(
-          repairTypeIds.map((item) => Number(item))
-        ),
+        ...new Set(repairTypeIds.map((item) => Number(item))),
       ];
     } else {
       finalRepairTypeIds = existingOrder.repairTypes.map(
@@ -973,24 +626,7 @@ export const updateOrder = async (
     }
 
     if (finalRepairTypeIds.length === 0) {
-      throw new Error(
-        "At least one repair type is required"
-      );
-    }
-
-    const repairTypes = await prisma.repairType.findMany({
-      where: {
-        id: {
-          in: finalRepairTypeIds,
-        },
-        status: true,
-      },
-    });
-
-    if (repairTypes.length !== finalRepairTypeIds.length) {
-      throw new Error(
-        "One or more repair types are invalid"
-      );
+      throw new Error("At least one repair type is required");
     }
 
     const finalExistingJewelleryDescription =
@@ -1004,33 +640,24 @@ export const updateOrder = async (
         : existingOrder.problemDescription;
 
     if (!finalExistingJewelleryDescription) {
-      throw new Error(
-        "Existing jewellery description is required"
-      );
+      throw new Error("Existing jewellery description is required");
     }
 
     if (!finalProblemDescription) {
-      throw new Error(
-        "Problem / repair description is required"
-      );
+      throw new Error("Problem / repair description is required");
     }
   }
 
-  // ==========================================================
-  // NEW MEDIA
-  // ==========================================================
+  // ----------------------------------------------------------
+  // NEW MEDIA + MEDIA VALIDATION (no DB)
+  // ----------------------------------------------------------
 
   const mediaData = files.map((file) => {
     const mediaType = getMediaType(file.mimetype);
 
-    const mediaContext = getMediaContext(
-      finalOrderType,
-      mediaType
-    );
-
     return {
       mediaType,
-      mediaContext,
+      mediaContext: getMediaContext(finalOrderType, mediaType),
       fileName: file.originalname,
       fileUrl: getFileUrl(file),
       storageKey: file.filename,
@@ -1038,10 +665,6 @@ export const updateOrder = async (
       fileSize: file.size,
     };
   });
-
-  // ==========================================================
-  // MEDIA VALIDATION
-  // ==========================================================
 
   const newImageFiles = files.filter((file) =>
     file.mimetype?.toLowerCase().startsWith("image/")
@@ -1051,10 +674,7 @@ export const updateOrder = async (
     (media) => media.mediaType === "IMAGE"
   ).length;
 
-  const finalImageCount =
-    existingImageCount + newImageFiles.length;
-
-  if (finalImageCount === 0) {
+  if (existingImageCount + newImageFiles.length === 0) {
     throw new Error(
       finalOrderType === "NEW"
         ? "At least one image is required for new order"
@@ -1062,165 +682,180 @@ export const updateOrder = async (
     );
   }
 
-  // ==========================================================
+  // ----------------------------------------------------------
+  // PARALLEL DB VERIFICATION
+  // ----------------------------------------------------------
+
+  const [branch, metal, category, maker, repairTypes] =
+    await Promise.all([
+      prisma.branch.findFirst({
+        where: { id: finalBranchId, status: true },
+      }),
+
+      finalMetalId
+        ? prisma.metal.findFirst({
+            where: { id: finalMetalId, status: true },
+          })
+        : null,
+
+      finalCategoryId
+        ? prisma.category.findFirst({
+            where: { id: finalCategoryId, status: true },
+          })
+        : null,
+
+      finalMakerId
+        ? prisma.maker.findFirst({
+            where: { id: finalMakerId, status: true },
+          })
+        : null,
+
+      finalOrderType === "REPAIR"
+        ? prisma.repairType.findMany({
+            where: { id: { in: finalRepairTypeIds }, status: true },
+          })
+        : [],
+    ]);
+
+  if (!branch) throw new Error("Active branch not found");
+  if (finalMetalId && !metal) throw new Error("Active metal not found");
+  if (finalCategoryId && !category) {
+    throw new Error("Active category not found");
+  }
+  if (finalMakerId && !maker) throw new Error("Active maker not found");
+
+  if (
+    finalOrderType === "REPAIR" &&
+    repairTypes.length !== finalRepairTypeIds.length
+  ) {
+    throw new Error("One or more repair types are invalid");
+  }
+
+  console.log("UPDATE ORDER VALIDATION ms =>", Date.now() - t0);
+
+  // ----------------------------------------------------------
   // TRANSACTION
-  // (file cleanup on failure is handled by the controller)
-  // ==========================================================
+  // ----------------------------------------------------------
 
-  const updatedOrder = await prisma.$transaction(
-    async (tx) => {
-      // --------------------------------------------------
-      // UPDATE ORDER
-      // --------------------------------------------------
+  const updatedOrder = await prisma.$transaction(async (tx) => {
+    await tx.order.update({
+      where: { id },
 
-      await tx.order.update({
-        where: {
-          id,
-        },
+      data: {
+        branchId: finalBranchId,
 
-        data: {
-          branchId: finalBranchId,
+        customerName: finalCustomerName,
+        customerPhone: finalCustomerPhone,
+        customerArea: finalCustomerArea,
 
-          customerName: finalCustomerName,
-          customerPhone: finalCustomerPhone,
-          customerArea: finalCustomerArea,
+        orderType: finalOrderType,
 
-          orderType: finalOrderType,
+        expectedDeliveryDate: new Date(finalDeliveryDate),
 
-          expectedDeliveryDate: new Date(finalDeliveryDate),
+        priority:
+          priority === "URGENT"
+            ? "URGENT"
+            : priority === "NORMAL"
+              ? "NORMAL"
+              : existingOrder.priority,
 
-          priority:
-            priority === "URGENT"
-              ? "URGENT"
-              : priority === "NORMAL"
-                ? "NORMAL"
-                : existingOrder.priority,
+        advance:
+          advance !== undefined
+            ? advance === ""
+              ? null
+              : Number(advance)
+            : existingOrder.advance,
 
-          advance:
-            advance !== undefined
-              ? advance === ""
-                ? null
-                : Number(advance)
-              : existingOrder.advance,
+        estimate:
+          estimate !== undefined
+            ? estimate === ""
+              ? null
+              : Number(estimate)
+            : existingOrder.estimate,
 
-          estimate:
-            estimate !== undefined
-              ? estimate === ""
-                ? null
-                : Number(estimate)
-              : existingOrder.estimate,
+        makerId: finalMakerId,
 
-          makerId: finalMakerId,
+        metalId: finalMetalId,
+        categoryId: finalCategoryId,
 
-          metalId: finalMetalId,
+        length:
+          length !== undefined
+            ? length === ""
+              ? null
+              : Number(length)
+            : existingOrder.length,
 
-          categoryId: finalCategoryId,
+        lengthUnit: finalLengthUnit,
 
-          length:
-            length !== undefined
-              ? length === ""
-                ? null
-                : Number(length)
-              : existingOrder.length,
+        size:
+          size !== undefined
+            ? size === ""
+              ? null
+              : String(size)
+            : existingOrder.size,
 
-          lengthUnit: finalLengthUnit,
+        weight:
+          weight !== undefined
+            ? weight === ""
+              ? null
+              : Number(weight)
+            : existingOrder.weight,
 
-          size:
-            size !== undefined
-              ? size === ""
-                ? null
-                : String(size)
-              : existingOrder.size,
+        purity: finalPurity,
 
-          weight:
-            weight !== undefined
-              ? weight === ""
-                ? null
-                : Number(weight)
-              : existingOrder.weight,
+        description:
+          description !== undefined
+            ? description.trim() || null
+            : existingOrder.description,
 
-          purity: finalPurity,
+        existingJewelleryDescription:
+          existingJewelleryDescription !== undefined
+            ? existingJewelleryDescription.trim() || null
+            : existingOrder.existingJewelleryDescription,
 
-          description:
-            description !== undefined
-              ? description.trim() || null
-              : existingOrder.description,
+        problemDescription:
+          problemDescription !== undefined
+            ? problemDescription.trim() || null
+            : existingOrder.problemDescription,
 
-          existingJewelleryDescription:
-            existingJewelleryDescription !== undefined
-              ? existingJewelleryDescription.trim() || null
-              : existingOrder.existingJewelleryDescription,
+        receivedItemDescription:
+          receivedItemDescription !== undefined
+            ? receivedItemDescription.trim() || null
+            : existingOrder.receivedItemDescription,
+      },
+    });
 
-          problemDescription:
-            problemDescription !== undefined
-              ? problemDescription.trim() || null
-              : existingOrder.problemDescription,
+    // Repair types
+    await tx.orderRepairType.deleteMany({
+      where: { orderId: id },
+    });
 
-          receivedItemDescription:
-            receivedItemDescription !== undefined
-              ? receivedItemDescription.trim() || null
-              : existingOrder.receivedItemDescription,
-        },
-      });
-
-      // --------------------------------------------------
-      // REPAIR TYPES
-      // --------------------------------------------------
-
-      await tx.orderRepairType.deleteMany({
-        where: {
+    if (finalOrderType === "REPAIR") {
+      await tx.orderRepairType.createMany({
+        data: finalRepairTypeIds.map((repairTypeId) => ({
           orderId: id,
-        },
-      });
-
-      if (finalOrderType === "REPAIR") {
-        await tx.orderRepairType.createMany({
-          data: finalRepairTypeIds.map((repairTypeId) => ({
-            orderId: id,
-            repairTypeId,
-          })),
-        });
-      }
-
-      // --------------------------------------------------
-      // ADD NEW MEDIA
-      // --------------------------------------------------
-
-      if (mediaData.length > 0) {
-        await tx.orderMedia.createMany({
-          data: mediaData.map((media) => ({
-            orderId: id,
-            ...media,
-          })),
-        });
-      }
-
-      // --------------------------------------------------
-      // FETCH UPDATED ORDER
-      // --------------------------------------------------
-
-      return await tx.order.findUnique({
-        where: {
-          id,
-        },
-
-        include: {
-          branch: true,
-          metal: true,
-          category: true,
-          maker: true,
-
-          repairTypes: {
-            include: {
-              repairType: true,
-            },
-          },
-
-          media: true,
-        },
+          repairTypeId,
+        })),
       });
     }
-  );
+
+    // New media
+    if (mediaData.length > 0) {
+      await tx.orderMedia.createMany({
+        data: mediaData.map((media) => ({
+          orderId: id,
+          ...media,
+        })),
+      });
+    }
+
+    return await tx.order.findUnique({
+      where: { id },
+      include: ORDER_INCLUDE,
+    });
+  });
+
+  console.log("UPDATE ORDER TOTAL ms =>", Date.now() - t0);
 
   return updatedOrder;
 };
@@ -1236,55 +871,30 @@ export const deleteOrder = async (orderId) => {
     throw new Error("Invalid order ID");
   }
 
-  // ==========================================================
-  // FIND ORDER
-  // ==========================================================
-
   const order = await prisma.order.findUnique({
-    where: {
-      id,
-    },
-
-    include: {
-      media: true,
-    },
+    where: { id },
+    include: { media: true },
   });
 
   if (!order) {
     throw new Error("Order not found");
   }
 
-  // ==========================================================
-  // DELETE DATABASE RECORDS
-  // ==========================================================
-
   await prisma.$transaction(async (tx) => {
-    // Delete repair type mappings
     await tx.orderRepairType.deleteMany({
-      where: {
-        orderId: id,
-      },
+      where: { orderId: id },
     });
 
-    // Delete media records
     await tx.orderMedia.deleteMany({
-      where: {
-        orderId: id,
-      },
+      where: { orderId: id },
     });
 
-    // Delete order
     await tx.order.delete({
-      where: {
-        id,
-      },
+      where: { id },
     });
   });
 
-  // ==========================================================
-  // DELETE PHYSICAL MEDIA FILES
-  // ==========================================================
-
+  // Delete physical files
   for (const media of order.media) {
     if (!media.storageKey) {
       continue;
@@ -1304,23 +914,13 @@ export const deleteOrder = async (orderId) => {
       continue;
     }
 
-    const filePath = path.resolve(
-      "uploads",
-      folder,
-      media.storageKey
-    );
+    const filePath = path.resolve("uploads", folder, media.storageKey);
 
     try {
       await fs.unlink(filePath);
-
       console.log(`MEDIA DELETED => ${filePath}`);
     } catch (error) {
-      // If the file is already missing, the DB delete
-      // is still considered successful.
-      console.error(
-        `MEDIA DELETE ERROR => ${filePath}`,
-        error.message
-      );
+      console.error(`MEDIA DELETE ERROR => ${filePath}`, error.message);
     }
   }
 

@@ -26,8 +26,7 @@ const normalizeBody = (body = {}) => {
   const data = {};
 
   for (const [key, value] of Object.entries(body)) {
-    data[key] =
-      typeof value === "string" ? value.trim() : value;
+    data[key] = typeof value === "string" ? value.trim() : value;
   }
 
   const raw = data.repairTypeIds ?? data["repairTypeIds[]"];
@@ -90,17 +89,22 @@ const parseOrderId = (value) => {
 // ============================================================
 
 export const createOrderController = async (req, res, next) => {
+  const t0 = Date.now();
+
   try {
+    const files = req.files || [];
+
     console.log("CREATE ORDER BODY =>", req.body);
     console.log(
-      "CREATE ORDER FILE COUNT =>",
-      (req.files || []).length
+      "CREATE ORDER FILES =>",
+      files.map(
+        (f) => `${f.originalname} (${(f.size / 1024 / 1024).toFixed(1)} MB)`
+      )
     );
 
-    const order = await createOrder(
-      normalizeBody(req.body),
-      req.files || []
-    );
+    const order = await createOrder(normalizeBody(req.body), files);
+
+    console.log("CREATE ORDER CONTROLLER ms =>", Date.now() - t0);
 
     return res.status(201).json({
       success: true,
@@ -116,16 +120,9 @@ export const createOrderController = async (req, res, next) => {
 // ============================================================
 // SHARE ORDER DETAILS VIA WHATSAPP
 // POST /api/orders/:id/share-whatsapp
-//
-// 1. Send order to maker.
-// 2. Send confirmation to customer.
 // ============================================================
 
-export const shareOrderWhatsAppController = async (
-  req,
-  res,
-  next
-) => {
+export const shareOrderWhatsAppController = async (req, res, next) => {
   try {
     const orderId = parseOrderId(req.params.id);
 
@@ -168,8 +165,7 @@ export const shareOrderWhatsAppController = async (
     if (result?.skipped) {
       return res.status(400).json({
         success: false,
-        message:
-          result.reason || "WhatsApp sharing was skipped",
+        message: result.reason || "WhatsApp sharing was skipped",
       });
     }
 
@@ -187,45 +183,40 @@ export const shareOrderWhatsAppController = async (
     };
 
     try {
-      const customerResult =
-        await sendCustomerOrderConfirmationTemplate({
-          to: order.customerPhone,
-          customerName: order.customerName,
-          orderNumber: order.orderNumber,
-          category: order.category?.name,
-          metal: order.metal?.name,
-          purity: order.purity,
-          weight: order.weight,
-          length: order.length,
-          lengthUnit: order.lengthUnit,
-          size: order.size,
-          description:
-            order.orderType === "REPAIR"
-              ? order.problemDescription ||
-                order.existingJewelleryDescription ||
-                order.receivedItemDescription ||
-                "Repair order received"
-              : order.description ||
-                "Thank you for choosing us!",
-        });
+      const customerResult = await sendCustomerOrderConfirmationTemplate({
+        to: order.customerPhone,
+        customerName: order.customerName,
+        orderNumber: order.orderNumber,
+        category: order.category?.name,
+        metal: order.metal?.name,
+        purity: order.purity,
+        weight: order.weight,
+        length: order.length,
+        lengthUnit: order.lengthUnit,
+        size: order.size,
+        description:
+          order.orderType === "REPAIR"
+            ? order.problemDescription ||
+              order.existingJewelleryDescription ||
+              order.receivedItemDescription ||
+              "Repair order received"
+            : order.description || "Thank you for choosing us!",
+      });
 
       customerNotification = {
         sent: true,
         message:
           customerResult?.message ||
           "Customer confirmation accepted by SMSMOJO",
-        metaMessageId:
-          customerResult?.meta_message_id || null,
+        metaMessageId: customerResult?.meta_message_id || null,
       };
 
       console.log("CUSTOMER WHATSAPP ACCEPTED =>", {
         orderNumber: order.orderNumber,
-        metaMessageId:
-          customerResult?.meta_message_id || null,
+        metaMessageId: customerResult?.meta_message_id || null,
       });
     } catch (customerError) {
-      // Customer notification failure should not undo
-      // the successful maker message.
+      // Customer failure should not undo the successful maker message.
       console.error(
         "CUSTOMER WHATSAPP NOTIFICATION FAILED:",
         customerError.message
@@ -259,27 +250,18 @@ export const shareOrderWhatsAppController = async (
 
         makerNotification: {
           sent: true,
-          message:
-            result?.message ||
-            "Maker message accepted by SMSMOJO",
-          metaMessageId:
-            result?.meta_message_id || null,
+          message: result?.message || "Maker message accepted by SMSMOJO",
+          metaMessageId: result?.meta_message_id || null,
         },
 
         customerNotification,
       },
     });
   } catch (error) {
-    console.error(
-      "MANUAL WHATSAPP SHARE FAILED:",
-      error.message
-    );
+    console.error("MANUAL WHATSAPP SHARE FAILED:", error.message);
 
     if (error.providerResponse) {
-      console.error(
-        "SMSMOJO PROVIDER RESPONSE =>",
-        error.providerResponse
-      );
+      console.error("SMSMOJO PROVIDER RESPONSE =>", error.providerResponse);
     }
 
     if (error.status || error.providerResponse) {
@@ -287,8 +269,7 @@ export const shareOrderWhatsAppController = async (
         success: false,
         message: "WhatsApp provider request failed",
         error: error.message,
-        providerResponse:
-          error.providerResponse || null,
+        providerResponse: error.providerResponse || null,
       });
     }
 
@@ -330,8 +311,7 @@ export const shareOrderImageWhatsAppController = async (
     if (result?.skipped) {
       return res.status(400).json({
         success: false,
-        message:
-          result.reason || "Image sharing was skipped",
+        message: result.reason || "Image sharing was skipped",
       });
     }
 
@@ -341,23 +321,18 @@ export const shareOrderImageWhatsAppController = async (
       data: {
         orderId: order.id,
         orderNumber: order.orderNumber,
-        metaMessageId:
-          result?.meta_message_id || null,
+        metaMessageId: result?.meta_message_id || null,
       },
     });
   } catch (error) {
-    console.error(
-      "ORDER IMAGE WHATSAPP FAILED:",
-      error.message
-    );
+    console.error("ORDER IMAGE WHATSAPP FAILED:", error.message);
 
     if (error.status || error.providerResponse) {
       return res.status(502).json({
         success: false,
         message: "WhatsApp image sending failed",
         error: error.message,
-        providerResponse:
-          error.providerResponse || null,
+        providerResponse: error.providerResponse || null,
       });
     }
 
@@ -397,8 +372,7 @@ export const shareOrderVideoWhatsAppController = async (
     if (order.orderType !== "NEW") {
       return res.status(400).json({
         success: false,
-        message:
-          "Video sharing is only enabled for NEW orders",
+        message: "Video sharing is only enabled for NEW orders",
       });
     }
 
@@ -407,16 +381,14 @@ export const shareOrderVideoWhatsAppController = async (
     if (result?.skipped) {
       return res.status(400).json({
         success: false,
-        message:
-          result.reason || "Video sharing was skipped",
+        message: result.reason || "Video sharing was skipped",
       });
     }
 
     console.log("ORDER VIDEO SHARE ACCEPTED =>", {
       orderId: order.id,
       orderNumber: order.orderNumber,
-      metaMessageId:
-        result?.meta_message_id || null,
+      metaMessageId: result?.meta_message_id || null,
     });
 
     return res.status(200).json({
@@ -425,16 +397,12 @@ export const shareOrderVideoWhatsAppController = async (
       data: {
         orderId: order.id,
         orderNumber: order.orderNumber,
-        metaMessageId:
-          result?.meta_message_id || null,
+        metaMessageId: result?.meta_message_id || null,
         providerMessage: result?.message || null,
       },
     });
   } catch (error) {
-    console.error(
-      "ORDER VIDEO WHATSAPP FAILED:",
-      error.message
-    );
+    console.error("ORDER VIDEO WHATSAPP FAILED:", error.message);
 
     if (error.providerResponse) {
       console.error(
@@ -448,8 +416,7 @@ export const shareOrderVideoWhatsAppController = async (
         success: false,
         message: "WhatsApp video sending failed",
         error: error.message,
-        providerResponse:
-          error.providerResponse || null,
+        providerResponse: error.providerResponse || null,
       });
     }
 
@@ -504,16 +471,67 @@ export const getOrderByIdController = async (req, res, next) => {
 
 // ============================================================
 // UPDATE ORDER
+// Responds right after saving. New media is sent to the maker
+// on WhatsApp in the background.
 // ============================================================
 
+// Sends WhatsApp media in the background. Never throws.
+const sendNewMediaInBackground = async (savedOrder, newMedia) => {
+  for (const media of newMedia) {
+    const mediaType = String(media.mediaType || "").toUpperCase();
+
+    try {
+      let result;
+
+      if (mediaType === "IMAGE") {
+        result = await sendOrderImageToMaker({
+          ...savedOrder,
+          media: [media],
+        });
+      } else if (mediaType === "VIDEO") {
+        result = await sendOrderVideoToMaker({
+          ...savedOrder,
+          media: [media],
+        });
+      } else {
+        console.log("UPDATED MEDIA TYPE NOT SENT:", mediaType, media.fileName);
+        continue;
+      }
+
+      if (result?.skipped) {
+        console.warn("UPDATED MEDIA WHATSAPP SKIPPED:", {
+          orderNumber: savedOrder.orderNumber,
+          fileName: media.fileName,
+          reason: result.reason,
+        });
+        continue;
+      }
+
+      console.log("UPDATED MEDIA WHATSAPP ACCEPTED:", {
+        orderNumber: savedOrder.orderNumber,
+        fileName: media.fileName,
+        mediaType,
+        metaMessageId: result?.meta_message_id || null,
+      });
+    } catch (error) {
+      console.error("UPDATED MEDIA WHATSAPP FAILED:", {
+        orderNumber: savedOrder.orderNumber,
+        fileName: media.fileName,
+        mediaType,
+        error: error.message,
+        providerResponse: error.providerResponse || null,
+      });
+    }
+  }
+};
 
 export const updateOrderController = async (req, res, next) => {
+  const t0 = Date.now();
+  const uploadedFiles = req.files || [];
   let order;
 
-  // Step 1: Save the order and newly uploaded media first.
+  // Step 1: save order + new media
   try {
-    const uploadedFiles = req.files || [];
-
     console.log("UPDATE ORDER REQUEST =>", {
       orderId: req.params.id,
       uploadedFileCount: uploadedFiles.length,
@@ -530,13 +548,11 @@ export const updateOrderController = async (req, res, next) => {
       uploadedFiles
     );
   } catch (error) {
-    await cleanupUploadedFiles(req.files || []);
+    await cleanupUploadedFiles(uploadedFiles);
     return next(error);
   }
 
-  const uploadedFiles = req.files || [];
-
-  // No new media means there is nothing to send.
+  // No new media: nothing to send
   if (uploadedFiles.length === 0) {
     return res.status(200).json({
       success: true,
@@ -549,39 +565,8 @@ export const updateOrderController = async (req, res, next) => {
     });
   }
 
-  // Step 2: Load the saved order with its maker and media.
-  let savedOrder;
-
-  try {
-    savedOrder = await getOrderById(order.id);
-  } catch (error) {
-    console.error(
-      "UPDATED ORDER FETCH FAILED:",
-      error.message
-    );
-
-    return res.status(200).json({
-      success: true,
-      message: "Order updated successfully, but media sharing could not start.",
-      data: order,
-      whatsapp: {
-        attempted: false,
-        results: [],
-        error: error.message,
-      },
-    });
-  }
-
-  const results = [];
-
-  // Step 3: Match ONLY the files uploaded in this update request.
-  const uploadedKeys = new Set(
-    uploadedFiles.map((file) => file.filename)
-  );
-
-  const newMedia = (savedOrder.media || []).filter((media) =>
-    uploadedKeys.has(media.storageKey)
-  );
+  // updateOrder already returns media + maker, no extra query needed
+  const savedOrder = order;
 
   if (!savedOrder.makerId || !savedOrder.maker) {
     console.warn(
@@ -601,109 +586,29 @@ export const updateOrderController = async (req, res, next) => {
     });
   }
 
-  // Step 4: Send each newly uploaded image/video separately.
-  for (const media of newMedia) {
-    const mediaType = String(
-      media.mediaType || ""
-    ).toUpperCase();
+  const uploadedKeys = new Set(uploadedFiles.map((file) => file.filename));
 
-    try {
-      let result;
+  const newMedia = (savedOrder.media || []).filter((media) =>
+    uploadedKeys.has(media.storageKey)
+  );
 
-      if (mediaType === "IMAGE") {
-        result = await sendOrderImageToMaker({
-          ...savedOrder,
-          media: [media],
-        });
-      } else if (mediaType === "VIDEO") {
-        result = await sendOrderVideoToMaker({
-          ...savedOrder,
-          media: [media],
-        });
-      } else {
-        console.log(
-          "UPDATED MEDIA TYPE NOT SENT:",
-          mediaType,
-          media.fileName
-        );
+  console.log("UPDATE ORDER RESPONSE ms =>", Date.now() - t0);
 
-        results.push({
-          mediaId: media.id,
-          fileName: media.fileName,
-          mediaType,
-          sent: false,
-          reason: "UNSUPPORTED_MEDIA_TYPE",
-        });
-
-        continue;
-      }
-
-      if (result?.skipped) {
-        results.push({
-          mediaId: media.id,
-          fileName: media.fileName,
-          mediaType,
-          sent: false,
-          reason: result.reason || "Provider skipped the message",
-        });
-
-        continue;
-      }
-
-      results.push({
-        mediaId: media.id,
-        fileName: media.fileName,
-        mediaType,
-        sent: true,
-        metaMessageId: result?.meta_message_id || null,
-      });
-
-      console.log("UPDATED MEDIA WHATSAPP ACCEPTED:", {
-        orderNumber: savedOrder.orderNumber,
-        fileName: media.fileName,
-        mediaType,
-        metaMessageId: result?.meta_message_id || null,
-      });
-    } catch (error) {
-      // WhatsApp failure must not undo the successfully saved order.
-      console.error("UPDATED MEDIA WHATSAPP FAILED:", {
-        orderNumber: savedOrder.orderNumber,
-        fileName: media.fileName,
-        mediaType,
-        error: error.message,
-        providerResponse: error.providerResponse || null,
-      });
-
-      results.push({
-        mediaId: media.id,
-        fileName: media.fileName,
-        mediaType,
-        sent: false,
-        error: error.message,
-      });
-    }
-  }
-
-  const sentCount = results.filter((item) => item.sent).length;
-  const failedCount = results.length - sentCount;
-
-  return res.status(200).json({
+  // Step 2: respond immediately
+  res.status(200).json({
     success: true,
-    message:
-      failedCount === 0
-        ? "Order updated successfully. New media sharing completed."
-        : "Order updated successfully, but some media could not be shared.",
+    message: "Order updated successfully. Media is being sent to the maker.",
     data: savedOrder,
     whatsapp: {
       attempted: true,
-      total: results.length,
-      sent: sentCount,
-      failed: failedCount,
-      results,
+      queued: true,
+      total: newMedia.length,
     },
   });
-};
 
+  // Step 3: WhatsApp in background (errors handled inside)
+  sendNewMediaInBackground(savedOrder, newMedia);
+};
 
 // ============================================================
 // DELETE ORDER

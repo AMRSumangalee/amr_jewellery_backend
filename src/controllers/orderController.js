@@ -506,24 +506,204 @@ export const getOrderByIdController = async (req, res, next) => {
 // UPDATE ORDER
 // ============================================================
 
+
 export const updateOrderController = async (req, res, next) => {
+  let order;
+
+  // Step 1: Save the order and newly uploaded media first.
   try {
-    const order = await updateOrder(
+    const uploadedFiles = req.files || [];
+
+    console.log("UPDATE ORDER REQUEST =>", {
+      orderId: req.params.id,
+      uploadedFileCount: uploadedFiles.length,
+      uploadedFiles: uploadedFiles.map((file) => ({
+        filename: file.filename,
+        mimetype: file.mimetype,
+        size: file.size,
+      })),
+    });
+
+    order = await updateOrder(
       req.params.id,
       normalizeBody(req.body),
-      req.files || []
+      uploadedFiles
     );
-
-    return res.status(200).json({
-      success: true,
-      message: "Order updated successfully",
-      data: order,
-    });
   } catch (error) {
     await cleanupUploadedFiles(req.files || []);
     return next(error);
   }
+
+  const uploadedFiles = req.files || [];
+
+  // No new media means there is nothing to send.
+  if (uploadedFiles.length === 0) {
+    return res.status(200).json({
+      success: true,
+      message: "Order updated successfully. No new media uploaded.",
+      data: order,
+      whatsapp: {
+        attempted: false,
+        results: [],
+      },
+    });
+  }
+
+  // Step 2: Load the saved order with its maker and media.
+  let savedOrder;
+
+  try {
+    savedOrder = await getOrderById(order.id);
+  } catch (error) {
+    console.error(
+      "UPDATED ORDER FETCH FAILED:",
+      error.message
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: "Order updated successfully, but media sharing could not start.",
+      data: order,
+      whatsapp: {
+        attempted: false,
+        results: [],
+        error: error.message,
+      },
+    });
+  }
+
+  const results = [];
+
+  // Step 3: Match ONLY the files uploaded in this update request.
+  const uploadedKeys = new Set(
+    uploadedFiles.map((file) => file.filename)
+  );
+
+  const newMedia = (savedOrder.media || []).filter((media) =>
+    uploadedKeys.has(media.storageKey)
+  );
+
+  if (!savedOrder.makerId || !savedOrder.maker) {
+    console.warn(
+      "UPDATED MEDIA NOT SENT: No maker assigned",
+      savedOrder.orderNumber
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: "Order updated successfully, but no maker is assigned.",
+      data: savedOrder,
+      whatsapp: {
+        attempted: false,
+        results: [],
+        reason: "NO_MAKER_ASSIGNED",
+      },
+    });
+  }
+
+  // Step 4: Send each newly uploaded image/video separately.
+  for (const media of newMedia) {
+    const mediaType = String(
+      media.mediaType || ""
+    ).toUpperCase();
+
+    try {
+      let result;
+
+      if (mediaType === "IMAGE") {
+        result = await sendOrderImageToMaker({
+          ...savedOrder,
+          media: [media],
+        });
+      } else if (mediaType === "VIDEO") {
+        result = await sendOrderVideoToMaker({
+          ...savedOrder,
+          media: [media],
+        });
+      } else {
+        console.log(
+          "UPDATED MEDIA TYPE NOT SENT:",
+          mediaType,
+          media.fileName
+        );
+
+        results.push({
+          mediaId: media.id,
+          fileName: media.fileName,
+          mediaType,
+          sent: false,
+          reason: "UNSUPPORTED_MEDIA_TYPE",
+        });
+
+        continue;
+      }
+
+      if (result?.skipped) {
+        results.push({
+          mediaId: media.id,
+          fileName: media.fileName,
+          mediaType,
+          sent: false,
+          reason: result.reason || "Provider skipped the message",
+        });
+
+        continue;
+      }
+
+      results.push({
+        mediaId: media.id,
+        fileName: media.fileName,
+        mediaType,
+        sent: true,
+        metaMessageId: result?.meta_message_id || null,
+      });
+
+      console.log("UPDATED MEDIA WHATSAPP ACCEPTED:", {
+        orderNumber: savedOrder.orderNumber,
+        fileName: media.fileName,
+        mediaType,
+        metaMessageId: result?.meta_message_id || null,
+      });
+    } catch (error) {
+      // WhatsApp failure must not undo the successfully saved order.
+      console.error("UPDATED MEDIA WHATSAPP FAILED:", {
+        orderNumber: savedOrder.orderNumber,
+        fileName: media.fileName,
+        mediaType,
+        error: error.message,
+        providerResponse: error.providerResponse || null,
+      });
+
+      results.push({
+        mediaId: media.id,
+        fileName: media.fileName,
+        mediaType,
+        sent: false,
+        error: error.message,
+      });
+    }
+  }
+
+  const sentCount = results.filter((item) => item.sent).length;
+  const failedCount = results.length - sentCount;
+
+  return res.status(200).json({
+    success: true,
+    message:
+      failedCount === 0
+        ? "Order updated successfully. New media sharing completed."
+        : "Order updated successfully, but some media could not be shared.",
+    data: savedOrder,
+    whatsapp: {
+      attempted: true,
+      total: results.length,
+      sent: sentCount,
+      failed: failedCount,
+      results,
+    },
+  });
 };
+
 
 // ============================================================
 // DELETE ORDER

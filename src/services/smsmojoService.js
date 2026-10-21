@@ -137,7 +137,7 @@ export const sendWhatsAppImageTemplate = async ({
   return await sendWhatsAppMessage(payload);
 };
 
-  // ======================================================
+// ======================================================
 // SEND WHATSAPP VIDEO TEMPLATE
 // ======================================================
 
@@ -223,8 +223,25 @@ export const sendCustomerOrderConfirmationTemplate = async ({
   size,
   description,
 }) => {
+
   const templateId =
     process.env.SMSMOJO_CUSTOMER_ORDER_CONFIRMATION_TEMPLATE_ID;
+
+
+
+  console.log("CUSTOMER TEMPLATE CONFIG:", {
+    templateIdExists: Boolean(templateId),
+    templateIdLength: templateId?.trim().length ?? 0,
+    templateNameExists: Boolean(
+      process.env.SMSMOJO_CUSTOMER_ORDER_CONFIRMATION_TEMPLATE_NAME
+    ),
+  });
+
+  if (!templateId?.trim()) {
+    throw new Error(
+      "Customer confirmation template ID is missing"
+    );
+  }
 
   if (!templateId) {
     throw new Error("Customer confirmation template ID is missing");

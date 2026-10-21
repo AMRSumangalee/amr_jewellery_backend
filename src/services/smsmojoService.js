@@ -210,6 +210,7 @@ export const sendWhatsAppVideoTemplate = async ({
  * Send Customer Order Confirmation WhatsApp Template
  */
 
+
 export const sendCustomerOrderConfirmationTemplate = async ({
   to,
   customerName,
@@ -223,27 +224,25 @@ export const sendCustomerOrderConfirmationTemplate = async ({
   size,
   description,
 }) => {
-
   const templateId =
     process.env.SMSMOJO_CUSTOMER_ORDER_CONFIRMED_TEMPLATE_ID;
 
+  const templateName =
+    process.env.SMSMOJO_CUSTOMER_ORDER_CONFIRMED_TEMPLATE_NAME ||
+    "customer_order_confirmation";
 
+  const language =
+    process.env.SMSMOJO_CUSTOMER_ORDER_CONFIRMED_TEMPLATE_LANGUAGE ||
+    "en_US";
 
   console.log("CUSTOMER TEMPLATE CONFIG:", {
-    templateIdExists: Boolean(templateId),
+    templateIdExists: Boolean(templateId?.trim()),
     templateIdLength: templateId?.trim().length ?? 0,
-    templateNameExists: Boolean(
-      process.env.SMSMOJO_CUSTOMER_ORDER_CONFIRMED_TEMPLATE_NAME
-    ),
+    templateName,
+    language,
   });
 
   if (!templateId?.trim()) {
-    throw new Error(
-      "Customer confirmation template ID is missing"
-    );
-  }
-
-  if (!templateId) {
     throw new Error("Customer confirmation template ID is missing");
   }
 
@@ -251,7 +250,6 @@ export const sendCustomerOrderConfirmationTemplate = async ({
     throw new Error("Customer WhatsApp number is missing");
   }
 
-  // Normalize Indian mobile number
   let phone = String(to).replace(/\D/g, "");
 
   if (phone.length === 10) {
@@ -265,13 +263,9 @@ export const sendCustomerOrderConfirmationTemplate = async ({
   const payload = {
     to: phone,
     type: "template",
-    template_id: templateId,
-    language:
-      process.env.SMSMOJO_CUSTOMER_ORDER_CONFIRMED_TEMPLATE_NAME ||
-      "en_US",
-    campaign_name:
-      process.env.SMSMOJO_CUSTOMER_ORDER_CONFIRMED_TEMPLATE_LANGUAGE ||
-      "customer_order_confirmation",
+    template_id: templateId.trim(),
+    language,
+    campaign_name: templateName,
     variables: {
       "1": String(customerName || "Customer"),
       "2": String(orderNumber || "N/A"),
@@ -287,6 +281,14 @@ export const sendCustomerOrderConfirmationTemplate = async ({
     },
   };
 
+  console.log("CUSTOMER WHATSAPP TEMPLATE REQUEST:", {
+    to: phone,
+    template_id: payload.template_id,
+    language: payload.language,
+    campaign_name: payload.campaign_name,
+    variableCount: Object.keys(payload.variables).length,
+    orderNumber,
+  });
+
   return sendWhatsAppMessage(payload);
 };
-

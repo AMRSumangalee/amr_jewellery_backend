@@ -205,3 +205,71 @@ export const sendWhatsAppVideoTemplate = async ({
 };
 
 
+
+/**
+ * Send Customer Order Confirmation WhatsApp Template
+ */
+
+export const sendCustomerOrderConfirmationTemplate = async ({
+  to,
+  customerName,
+  orderNumber,
+  category,
+  metal,
+  purity,
+  weight,
+  length,
+  lengthUnit,
+  size,
+  description,
+}) => {
+  const templateId =
+    process.env.SMSMOJO_CUSTOMER_ORDER_CONFIRMATION_TEMPLATE_ID;
+
+  if (!templateId) {
+    throw new Error("Customer confirmation template ID is missing");
+  }
+
+  if (!to) {
+    throw new Error("Customer WhatsApp number is missing");
+  }
+
+  // Normalize Indian mobile number
+  let phone = String(to).replace(/\D/g, "");
+
+  if (phone.length === 10) {
+    phone = `91${phone}`;
+  }
+
+  if (!/^91\d{10}$/.test(phone)) {
+    throw new Error("Invalid customer WhatsApp number");
+  }
+
+  const payload = {
+    to: phone,
+    type: "template",
+    template_id: templateId,
+    language:
+      process.env.SMSMOJO_CUSTOMER_ORDER_CONFIRMATION_TEMPLATE_LANGUAGE ||
+      "en_US",
+    campaign_name:
+      process.env.SMSMOJO_CUSTOMER_ORDER_CONFIRMATION_TEMPLATE_NAME ||
+      "customer_order_confirmation",
+    variables: {
+      "1": String(customerName || "Customer"),
+      "2": String(orderNumber || "N/A"),
+      "3": String(customerName || "Customer"),
+      "4": String(category || "N/A"),
+      "5": String(metal || "N/A"),
+      "6": String(purity || "N/A"),
+      "7": String(weight ?? "N/A"),
+      "8": String(length ?? "N/A"),
+      "9": String(lengthUnit || ""),
+      "10": String(size || "N/A"),
+      "11": String(description || "Thank you for choosing us!"),
+    },
+  };
+
+  return sendWhatsAppMessage(payload);
+};
+

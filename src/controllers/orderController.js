@@ -1,4 +1,3 @@
-
 import {
   createOrder,
   getOrders,
@@ -14,6 +13,10 @@ import {
   sendOrderImageToMaker,
   sendOrderVideoToMaker,
 } from "../services/makerWhatsAppService.js";
+
+import {
+  sendCustomerOrderConfirmationTemplate,
+} from "../services/smsmojoService.js";
 
 // ============================================================
 // HELPERS
@@ -71,7 +74,6 @@ const normalizeBody = (body = {}) => {
   return data;
 };
 
-// Validate order ID consistently.
 const parseOrderId = (value) => {
   const id = Number(value);
 
@@ -114,6 +116,9 @@ export const createOrderController = async (req, res, next) => {
 // ============================================================
 // SHARE ORDER DETAILS VIA WHATSAPP
 // POST /api/orders/:id/share-whatsapp
+//
+// 1. Send order to maker.
+// 2. Send confirmation to customer.
 // ============================================================
 
 export const shareOrderWhatsAppController = async (
@@ -154,6 +159,7 @@ export const shareOrderWhatsAppController = async (
       makerId: order.makerId,
     });
 
+    // STEP 1: Send order details to maker
     const result =
       order.orderType === "NEW"
         ? await sendNewOrderToMaker(order)
@@ -162,32 +168,112 @@ export const shareOrderWhatsAppController = async (
     if (result?.skipped) {
       return res.status(400).json({
         success: false,
-        message: result.reason || "WhatsApp sharing was skipped",
+        message:
+          result.reason || "WhatsApp sharing was skipped",
       });
     }
 
-    console.log("WHATSAPP SHARE ACCEPTED =>", {
+    console.log("MAKER WHATSAPP SHARE ACCEPTED =>", {
       orderNumber: order.orderNumber,
       orderType: order.orderType,
       metaMessageId: result?.meta_message_id || null,
     });
 
+    // STEP 2: Send order confirmation to customer
+    let customerNotification = {
+      sent: false,
+      message: "Customer notification was not sent",
+      metaMessageId: null,
+    };
+
+    try {
+      const customerResult =
+        await sendCustomerOrderConfirmationTemplate({
+          to: order.customerPhone,
+          customerName: order.customerName,
+          orderNumber: order.orderNumber,
+          category: order.category?.name,
+          metal: order.metal?.name,
+          purity: order.purity,
+          weight: order.weight,
+          length: order.length,
+          lengthUnit: order.lengthUnit,
+          size: order.size,
+          description:
+            order.orderType === "REPAIR"
+              ? order.problemDescription ||
+                order.existingJewelleryDescription ||
+                order.receivedItemDescription ||
+                "Repair order received"
+              : order.description ||
+                "Thank you for choosing us!",
+        });
+
+      customerNotification = {
+        sent: true,
+        message:
+          customerResult?.message ||
+          "Customer confirmation accepted by SMSMOJO",
+        metaMessageId:
+          customerResult?.meta_message_id || null,
+      };
+
+      console.log("CUSTOMER WHATSAPP ACCEPTED =>", {
+        orderNumber: order.orderNumber,
+        metaMessageId:
+          customerResult?.meta_message_id || null,
+      });
+    } catch (customerError) {
+      // Customer notification failure should not undo
+      // the successful maker message.
+      console.error(
+        "CUSTOMER WHATSAPP NOTIFICATION FAILED:",
+        customerError.message
+      );
+
+      if (customerError.providerResponse) {
+        console.error(
+          "CUSTOMER SMSMOJO PROVIDER RESPONSE =>",
+          customerError.providerResponse
+        );
+      }
+
+      customerNotification = {
+        sent: false,
+        message: customerError.message,
+        metaMessageId: null,
+      };
+    }
+
+    // STEP 3: Return API response
     return res.status(200).json({
       success: true,
       message:
         order.orderType === "REPAIR"
-          ? "Repair order WhatsApp message accepted by SMSMOJO"
-          : "New order WhatsApp message accepted by SMSMOJO",
+          ? "Repair order shared with maker"
+          : "New order shared with maker",
       data: {
         orderId: order.id,
         orderNumber: order.orderNumber,
         orderType: order.orderType,
-        metaMessageId: result?.meta_message_id || null,
-        providerMessage: result?.message || null,
+
+        makerNotification: {
+          sent: true,
+          message:
+            result?.message ||
+            "Maker message accepted by SMSMOJO",
+          metaMessageId:
+            result?.meta_message_id || null,
+        },
+
+        customerNotification,
       },
     });
   } catch (error) {
-    console.error("MANUAL WHATSAPP SHARE FAILED:", error.message);
+    console.error(
+      "MANUAL WHATSAPP SHARE FAILED:",
+      error.message
+    );
 
     if (error.providerResponse) {
       console.error(
@@ -201,6 +287,8 @@ export const shareOrderWhatsAppController = async (
         success: false,
         message: "WhatsApp provider request failed",
         error: error.message,
+        providerResponse:
+          error.providerResponse || null,
       });
     }
 
@@ -242,7 +330,8 @@ export const shareOrderImageWhatsAppController = async (
     if (result?.skipped) {
       return res.status(400).json({
         success: false,
-        message: result.reason || "Image sharing was skipped",
+        message:
+          result.reason || "Image sharing was skipped",
       });
     }
 
@@ -252,18 +341,23 @@ export const shareOrderImageWhatsAppController = async (
       data: {
         orderId: order.id,
         orderNumber: order.orderNumber,
-        metaMessageId: result?.meta_message_id || null,
+        metaMessageId:
+          result?.meta_message_id || null,
       },
     });
   } catch (error) {
-    console.error("ORDER IMAGE WHATSAPP FAILED:", error.message);
+    console.error(
+      "ORDER IMAGE WHATSAPP FAILED:",
+      error.message
+    );
 
     if (error.status || error.providerResponse) {
       return res.status(502).json({
         success: false,
         message: "WhatsApp image sending failed",
         error: error.message,
-        providerResponse: error.providerResponse || null,
+        providerResponse:
+          error.providerResponse || null,
       });
     }
 
@@ -303,7 +397,8 @@ export const shareOrderVideoWhatsAppController = async (
     if (order.orderType !== "NEW") {
       return res.status(400).json({
         success: false,
-        message: "Video sharing is only enabled for NEW orders",
+        message:
+          "Video sharing is only enabled for NEW orders",
       });
     }
 
@@ -312,14 +407,16 @@ export const shareOrderVideoWhatsAppController = async (
     if (result?.skipped) {
       return res.status(400).json({
         success: false,
-        message: result.reason || "Video sharing was skipped",
+        message:
+          result.reason || "Video sharing was skipped",
       });
     }
 
     console.log("ORDER VIDEO SHARE ACCEPTED =>", {
       orderId: order.id,
       orderNumber: order.orderNumber,
-      metaMessageId: result?.meta_message_id || null,
+      metaMessageId:
+        result?.meta_message_id || null,
     });
 
     return res.status(200).json({
@@ -328,12 +425,16 @@ export const shareOrderVideoWhatsAppController = async (
       data: {
         orderId: order.id,
         orderNumber: order.orderNumber,
-        metaMessageId: result?.meta_message_id || null,
+        metaMessageId:
+          result?.meta_message_id || null,
         providerMessage: result?.message || null,
       },
     });
   } catch (error) {
-    console.error("ORDER VIDEO WHATSAPP FAILED:", error.message);
+    console.error(
+      "ORDER VIDEO WHATSAPP FAILED:",
+      error.message
+    );
 
     if (error.providerResponse) {
       console.error(
@@ -347,7 +448,8 @@ export const shareOrderVideoWhatsAppController = async (
         success: false,
         message: "WhatsApp video sending failed",
         error: error.message,
-        providerResponse: error.providerResponse || null,
+        providerResponse:
+          error.providerResponse || null,
       });
     }
 

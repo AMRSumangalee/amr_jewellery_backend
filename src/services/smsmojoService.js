@@ -225,7 +225,7 @@ export const sendCustomerOrderConfirmationTemplate = async ({
 }) => {
 
   const templateId =
-    process.env.SMSMOJO_CUSTOMER_ORDER_CONFIRMATION_TEMPLATE_ID;
+    process.env.SMSMOJO_CUSTOMER_ORDER_CONFIRMED_TEMPLATE_ID;
 
 
 
@@ -233,7 +233,7 @@ export const sendCustomerOrderConfirmationTemplate = async ({
     templateIdExists: Boolean(templateId),
     templateIdLength: templateId?.trim().length ?? 0,
     templateNameExists: Boolean(
-      process.env.SMSMOJO_CUSTOMER_ORDER_CONFIRMATION_TEMPLATE_NAME
+      process.env.SMSMOJO_CUSTOMER_ORDER_CONFIRMED_TEMPLATE_NAME
     ),
   });
 
@@ -267,10 +267,10 @@ export const sendCustomerOrderConfirmationTemplate = async ({
     type: "template",
     template_id: templateId,
     language:
-      process.env.SMSMOJO_CUSTOMER_ORDER_CONFIRMATION_TEMPLATE_LANGUAGE ||
+      process.env.SMSMOJO_CUSTOMER_ORDER_CONFIRMED_TEMPLATE_NAME ||
       "en_US",
     campaign_name:
-      process.env.SMSMOJO_CUSTOMER_ORDER_CONFIRMATION_TEMPLATE_NAME ||
+      process.env.SMSMOJO_CUSTOMER_ORDER_CONFIRMED_TEMPLATE_LANGUAGE ||
       "customer_order_confirmation",
     variables: {
       "1": String(customerName || "Customer"),

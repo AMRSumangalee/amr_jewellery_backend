@@ -6,6 +6,7 @@ import {
   getUserById,
   updateUser,
   updateUserStatus,
+  updateUserPassword,
 } from "../controllers/userController.js";
 
 import { authenticate } from "../middleware/authMiddleware.js";
@@ -20,13 +21,10 @@ router.use(authenticate);
 router.use(authorizeRoles("SUPER_ADMIN"));
 
 router.post("/", createUser);
-
 router.get("/", getUsers);
-
 router.get("/:id", getUserById);
-
 router.put("/:id", updateUser);
-
 router.patch("/:id/status", updateUserStatus);
+router.patch("/:id/password", updateUserPassword);
 
 export default router;

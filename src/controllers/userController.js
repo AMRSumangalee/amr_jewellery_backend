@@ -1,5 +1,8 @@
 import prisma from "../config/database.js";
-import { hashPassword } from "../utils/password.js";
+import {
+  hashPassword,
+  comparePassword,
+} from "../utils/password.js";
 
 // =====================================================
 // CREATE USER
@@ -407,6 +410,70 @@ export const updateUserStatus = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Failed to update user status",
+    });
+  }
+};
+
+
+
+export const updateUserPassword = async (req, res) => {
+  try {
+    const userId = Number(req.params.id);
+    const { newPassword } = req.body;
+
+    if (!Number.isInteger(userId) || userId <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid user ID",
+      });
+    }
+
+    if (
+      typeof newPassword !== "string" ||
+      newPassword.length < 8
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Password must be at least 8 characters",
+      });
+    }
+
+    const user = await prisma.user.findFirst({
+      where: {
+        id: userId,
+        role: {
+          in: ["ADMIN", "MANAGER"],
+        },
+      },
+      select: {
+        id: true,
+      },
+    });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    const passwordHash = await hashPassword(newPassword);
+
+    await prisma.user.update({
+      where: { id: userId },
+      data: { passwordHash },
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Password updated successfully",
+    });
+  } catch (error) {
+    console.error("UPDATE USER PASSWORD ERROR:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to update password",
     });
   }
 };

@@ -428,6 +428,7 @@ export const shareOrderVideoWhatsAppController = async (
 // GET ORDER LIST
 // ============================================================
 
+
 export const getOrdersController = async (req, res, next) => {
   try {
     const result = await getOrders({
@@ -438,6 +439,11 @@ export const getOrdersController = async (req, res, next) => {
       status: req.query.status,
       branchId: req.query.branchId,
       priority: req.query.priority,
+
+      // Reports filters
+      fromDate: req.query.fromDate,
+      toDate: req.query.toDate,
+      makerId: req.query.makerId,
     });
 
     return res.status(200).json({
@@ -450,6 +456,7 @@ export const getOrdersController = async (req, res, next) => {
     return next(error);
   }
 };
+
 
 // ============================================================
 // GET ORDER DETAILS

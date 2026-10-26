@@ -354,6 +354,7 @@ export const createOrder = async (data, files = []) => {
 // GET ORDER LIST
 // ============================================================
 
+
 export const getOrders = async ({
   page = 1,
   limit = 10,
@@ -362,14 +363,20 @@ export const getOrders = async ({
   status,
   branchId,
   priority,
+  fromDate,
+  toDate,
+  makerId,
 }) => {
   const currentPage = Math.max(Number(page) || 1, 1);
-  const currentLimit = Math.min(Math.max(Number(limit) || 10, 1), 100);
+  const currentLimit = Math.min(
+    Math.max(Number(limit) || 10, 1),
+    100
+  );
 
   const skip = (currentPage - 1) * currentLimit;
-
   const where = {};
 
+  // Order type filter
   if (orderType) {
     if (!["NEW", "REPAIR"].includes(orderType)) {
       throw new Error("Invalid order type");
@@ -378,6 +385,7 @@ export const getOrders = async ({
     where.orderType = orderType;
   }
 
+  // Status filter
   if (status) {
     const allowedStatuses = [
       "DRAFT",
@@ -399,10 +407,29 @@ export const getOrders = async ({
     where.status = status;
   }
 
-  if (branchId) {
-    where.branchId = Number(branchId);
+  // Branch filter
+  if (branchId !== undefined && branchId !== null && branchId !== "") {
+    const parsedBranchId = Number(branchId);
+
+    if (!Number.isInteger(parsedBranchId) || parsedBranchId <= 0) {
+      throw new Error("Invalid branch ID");
+    }
+
+    where.branchId = parsedBranchId;
   }
 
+  // Maker filter
+  if (makerId !== undefined && makerId !== null && makerId !== "") {
+    const parsedMakerId = Number(makerId);
+
+    if (!Number.isInteger(parsedMakerId) || parsedMakerId <= 0) {
+      throw new Error("Invalid maker ID");
+    }
+
+    where.makerId = parsedMakerId;
+  }
+
+  // Priority filter
   if (priority) {
     if (!["NORMAL", "URGENT"].includes(priority)) {
       throw new Error("Invalid priority");
@@ -411,6 +438,61 @@ export const getOrders = async ({
     where.priority = priority;
   }
 
+  // Order Created Date filter.
+  // Date inputs are interpreted using India Standard Time (UTC+05:30).
+  // Both boundary dates are inclusive.
+  if (fromDate || toDate) {
+    const createdAt = {};
+
+    const parseDate = (value, label, isEndOfDay = false) => {
+      if (typeof value !== "string" ||
+          !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+        throw new Error(`Invalid ${label}. Expected YYYY-MM-DD`);
+      }
+
+      const date = new Date(
+        `${value}T${isEndOfDay ? "23:59:59.999" : "00:00:00.000"}+05:30`
+      );
+
+      if (Number.isNaN(date.getTime())) {
+        throw new Error(`Invalid ${label}`);
+      }
+
+      // Reject impossible dates such as 2026-02-31.
+      const [year, month, day] = value.split("-").map(Number);
+      const check = new Date(Date.UTC(year, month - 1, day));
+
+      if (
+        check.getUTCFullYear() !== year ||
+        check.getUTCMonth() !== month - 1 ||
+        check.getUTCDate() !== day
+      ) {
+        throw new Error(`Invalid ${label}`);
+      }
+
+      return date;
+    };
+
+    if (fromDate) {
+      createdAt.gte = parseDate(fromDate, "fromDate");
+    }
+
+    if (toDate) {
+      createdAt.lte = parseDate(toDate, "toDate", true);
+    }
+
+    if (
+      createdAt.gte &&
+      createdAt.lte &&
+      createdAt.gte.getTime() > createdAt.lte.getTime()
+    ) {
+      throw new Error("fromDate must be before or equal to toDate");
+    }
+
+    where.createdAt = createdAt;
+  }
+
+  // Search by order number, customer name, phone, or area.
   if (search?.trim()) {
     const searchText = search.trim();
 

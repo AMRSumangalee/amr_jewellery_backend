@@ -1,3 +1,4 @@
+
 import fs from "fs/promises";
 import path from "path";
 
@@ -108,6 +109,7 @@ export const cleanupUploadedFiles = async (files = []) => {
 
 // ============================================================
 // CREATE ORDER
+// Media is optional.
 // ============================================================
 
 export const createOrder = async (data, files = []) => {
@@ -164,22 +166,8 @@ export const createOrder = async (data, files = []) => {
     throw new Error("Expected delivery date is required");
   }
 
-  const imageMissingMessage =
-    orderType === "NEW"
-      ? "At least one image is required for new order"
-      : "At least one before-repair image is required for repair order";
-
-  if (!files || files.length === 0) {
-    throw new Error(imageMissingMessage);
-  }
-
-  const imageFiles = files.filter((file) =>
-    file.mimetype?.toLowerCase().startsWith("image/")
-  );
-
-  if (imageFiles.length === 0) {
-    throw new Error(imageMissingMessage);
-  }
+  // Image / Video / Audio are optional.
+  // Order can be created without any media.
 
   if (orderType === "NEW") {
     if (!metalId) throw new Error("Metal is required for new order");
@@ -262,7 +250,7 @@ export const createOrder = async (data, files = []) => {
   const orderNumber = await generateOrderNumber();
 
   // ----------------------------------------------------------
-  // MEDIA
+  // MEDIA (OPTIONAL)
   // ----------------------------------------------------------
 
   const mediaData = files.map((file) => {
@@ -280,7 +268,7 @@ export const createOrder = async (data, files = []) => {
   });
 
   // ----------------------------------------------------------
-  // CREATE (single call, nested writes are already atomic)
+  // CREATE
   // ----------------------------------------------------------
 
   const order = await prisma.order.create({
@@ -328,9 +316,13 @@ export const createOrder = async (data, files = []) => {
 
       receivedItemDescription: receivedItemDescription?.trim() || null,
 
-      media: {
-        create: mediaData,
-      },
+      // No media = skip nested media creation
+      media:
+        mediaData.length > 0
+          ? {
+              create: mediaData,
+            }
+          : undefined,
 
       repairTypes:
         orderType === "REPAIR"
@@ -353,7 +345,6 @@ export const createOrder = async (data, files = []) => {
 // ============================================================
 // GET ORDER LIST
 // ============================================================
-
 
 export const getOrders = async ({
   page = 1,
@@ -445,8 +436,10 @@ export const getOrders = async ({
     const createdAt = {};
 
     const parseDate = (value, label, isEndOfDay = false) => {
-      if (typeof value !== "string" ||
-          !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+      if (
+        typeof value !== "string" ||
+        !/^\d{4}-\d{2}-\d{2}$/.test(value)
+      ) {
         throw new Error(`Invalid ${label}. Expected YYYY-MM-DD`);
       }
 
@@ -554,6 +547,7 @@ export const getOrderById = async (orderId) => {
 
 // ============================================================
 // UPDATE ORDER
+// Media is optional. Existing media is preserved.
 // ============================================================
 
 export const updateOrder = async (orderId, data, files = []) => {
@@ -647,6 +641,7 @@ export const updateOrder = async (orderId, data, files = []) => {
   if (!finalCustomerName) throw new Error("Customer name is required");
   if (!finalCustomerPhone) throw new Error("Customer phone is required");
   if (!finalCustomerArea) throw new Error("Customer area is required");
+
   if (!finalDeliveryDate) {
     throw new Error("Expected delivery date is required");
   }
@@ -731,7 +726,7 @@ export const updateOrder = async (orderId, data, files = []) => {
   }
 
   // ----------------------------------------------------------
-  // NEW MEDIA + MEDIA VALIDATION (no DB)
+  // NEW MEDIA (OPTIONAL)
   // ----------------------------------------------------------
 
   const mediaData = files.map((file) => {
@@ -748,21 +743,8 @@ export const updateOrder = async (orderId, data, files = []) => {
     };
   });
 
-  const newImageFiles = files.filter((file) =>
-    file.mimetype?.toLowerCase().startsWith("image/")
-  );
-
-  const existingImageCount = existingOrder.media.filter(
-    (media) => media.mediaType === "IMAGE"
-  ).length;
-
-  if (existingImageCount + newImageFiles.length === 0) {
-    throw new Error(
-      finalOrderType === "NEW"
-        ? "At least one image is required for new order"
-        : "At least one before-repair image is required for repair order"
-    );
-  }
+  // No image validation here.
+  // Existing media is preserved when no new media is uploaded.
 
   // ----------------------------------------------------------
   // PARALLEL DB VERIFICATION
@@ -801,10 +783,14 @@ export const updateOrder = async (orderId, data, files = []) => {
 
   if (!branch) throw new Error("Active branch not found");
   if (finalMetalId && !metal) throw new Error("Active metal not found");
+
   if (finalCategoryId && !category) {
     throw new Error("Active category not found");
   }
-  if (finalMakerId && !maker) throw new Error("Active maker not found");
+
+  if (finalMakerId && !maker) {
+    throw new Error("Active maker not found");
+  }
 
   if (
     finalOrderType === "REPAIR" &&
@@ -922,6 +908,7 @@ export const updateOrder = async (orderId, data, files = []) => {
     }
 
     // New media
+    // If no new media is uploaded, existing media remains unchanged.
     if (mediaData.length > 0) {
       await tx.orderMedia.createMany({
         data: mediaData.map((media) => ({

@@ -1,3 +1,4 @@
+
 import {
   createOrder,
   getOrders,
@@ -86,6 +87,7 @@ const parseOrderId = (value) => {
 // ============================================================
 // CREATE ORDER
 // WhatsApp is NOT sent automatically.
+// Media is optional.
 // ============================================================
 
 export const createOrderController = async (req, res, next) => {
@@ -102,6 +104,7 @@ export const createOrderController = async (req, res, next) => {
       )
     );
 
+    // Order can be created with zero uploaded files.
     const order = await createOrder(normalizeBody(req.body), files);
 
     console.log("CREATE ORDER CONTROLLER ms =>", Date.now() - t0);
@@ -428,7 +431,6 @@ export const shareOrderVideoWhatsAppController = async (
 // GET ORDER LIST
 // ============================================================
 
-
 export const getOrdersController = async (req, res, next) => {
   try {
     const result = await getOrders({
@@ -456,7 +458,6 @@ export const getOrdersController = async (req, res, next) => {
     return next(error);
   }
 };
-
 
 // ============================================================
 // GET ORDER DETAILS

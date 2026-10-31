@@ -8,6 +8,7 @@ import {
 // ======================================================
 // FORMAT DATE
 // ======================================================
+
 const formatDate = (value) => {
   if (!value) return "N/A";
 
@@ -27,6 +28,7 @@ const formatDate = (value) => {
 // ======================================================
 // GET MAKER WHATSAPP NUMBER
 // ======================================================
+
 const getPhoneNumber = (maker) => {
   const phone = maker?.whatsappNumber || maker?.phone;
 
@@ -52,6 +54,7 @@ const getPhoneNumber = (maker) => {
 // ======================================================
 // GET REPAIR TYPE NAMES
 // ======================================================
+
 const getRepairTypes = (order) => {
   if (!Array.isArray(order.repairTypes) || !order.repairTypes.length) {
     return "N/A";
@@ -67,6 +70,7 @@ const getRepairTypes = (order) => {
 // ======================================================
 // SEND NEW ORDER TEMPLATE
 // ======================================================
+
 export const sendNewOrderToMaker = async (order) => {
   if (order.orderType !== "NEW") {
     return {
@@ -128,6 +132,7 @@ export const sendNewOrderToMaker = async (order) => {
 // ======================================================
 // SEND REPAIR ORDER TEMPLATE
 // ======================================================
+
 export const sendRepairOrderToMaker = async (order) => {
   if (order.orderType !== "REPAIR") {
     return {
@@ -148,11 +153,13 @@ export const sendRepairOrderToMaker = async (order) => {
 
   const to = getPhoneNumber(order.maker);
 
+  // Customer name and personal details are not shared with the maker.
+  // Keep variable positions unchanged for the already-approved template.
   const variables = {
     "1": order.maker.name || "Maker",
     "2": order.orderNumber || "N/A",
     "3": order.branch?.name || "N/A",
-    "4": order.customer?.name || order.customerName || "N/A",
+    "4": "N/A",
     "5": order.metal?.name || "N/A",
     "6": order.category?.name || "N/A",
     "7": getRepairTypes(order),
@@ -185,11 +192,11 @@ export const sendRepairOrderToMaker = async (order) => {
 };
 
 // ======================================================
-// GET PUBLIC IMAGE URL
+// PUBLIC MEDIA URL HELPERS
 // ======================================================
 
-const getPublicImageUrl = (media) => {
-  const baseUrl = process.env.PUBLIC_BASE_URL?.replace(/\/+$/, "");
+const getPublicBaseUrl = () => {
+  const baseUrl = process.env.PUBLIC_BASE_URL?.trim().replace(/\/+$/, "");
 
   if (!baseUrl || !/^https:\/\//i.test(baseUrl)) {
     throw new Error(
@@ -197,11 +204,151 @@ const getPublicImageUrl = (media) => {
     );
   }
 
+  return baseUrl;
+};
+
+// Build public URL using storageKey or the stored legacy path.
+// Physical permanent-uploads paths are never sent to SMSMOJO.
+const buildPublicMediaUrl = (media, expectedType) => {
+  if (!media) {
+    throw new Error(`${expectedType} media is missing`);
+  }
+
+  const baseUrl = getPublicBaseUrl();
+
+  const folderMap = {
+    IMAGE: "images",
+    VIDEO: "videos",
+  };
+
+  const folder = folderMap[expectedType];
+
+  if (!folder) {
+    throw new Error("Unsupported media type");
+  }
+
+  const mimeType = String(
+    media.mimeType || media.mimetype || media.mime_type || ""
+  ).toLowerCase();
+
+  const mediaType = String(
+    media.mediaType || media.fileType || media.type || ""
+  ).toUpperCase();
+
+  const storedPath = String(
+    media.fileUrl || media.filePath || media.url || media.path || ""
+  ).trim();
+
+  const storageKey = String(media.storageKey || "").trim();
+
+  // Validate that the selected media really belongs to this type.
+  if (mediaType && mediaType !== expectedType) {
+    throw new Error(
+      `Expected ${expectedType} media but received ${mediaType}`
+    );
+  }
+
+  if (mimeType && !mimeType.startsWith(
+    expectedType === "IMAGE" ? "image/" : "video/"
+  )) {
+    throw new Error(`Invalid ${expectedType} MIME type: ${mimeType}`);
+  }
+
+  // Preserve an already-public HTTPS URL.
+  if (/^https:\/\//i.test(storedPath)) {
+    const parsedUrl = new URL(storedPath);
+
+    if (parsedUrl.protocol !== "https:") {
+      throw new Error("Media URL must use HTTPS");
+    }
+
+    console.log(`${expectedType} EXISTING PUBLIC URL:`, parsedUrl.href);
+
+    return parsedUrl.href;
+  }
+
+  let fileName = "";
+
+  // storageKey is preferred because it is the uploaded filename.
+  if (storageKey) {
+    fileName = storageKey;
+  } else if (storedPath) {
+    const normalizedPath = storedPath
+      .replace(/\\/g, "/")
+      .split("?")[0]
+      .split("#")[0];
+
+    // Supports:
+    // /uploads/images/file.jpg
+    // ../../permanent-uploads/images/file.jpg
+    // permanent-uploads/images/file.jpg
+    const match = normalizedPath.match(
+      /(?:^|\/)(images|videos)\/([^/]+)$/i
+    );
+
+    if (match) {
+      const storedFolder = match[1].toLowerCase();
+
+      if (storedFolder !== folder) {
+        throw new Error(
+          `Media folder mismatch. Expected ${folder}, found ${storedFolder}`
+        );
+      }
+
+      fileName = match[2];
+    } else {
+      // Legacy path may contain only the filename.
+      fileName = normalizedPath.split("/").pop() || "";
+    }
+  }
+
+  if (!fileName) {
+    throw new Error(`${expectedType} filename is missing`);
+  }
+
+  // Prevent directory traversal and path injection.
+  fileName = pathSafeFileName(fileName);
+
+  const publicUrl =
+    `${baseUrl}/uploads/${folder}/${encodeURIComponent(fileName)}`;
+
+  console.log(`${expectedType} PUBLIC URL GENERATED:`, {
+    mediaId: media.id || null,
+    mediaType: expectedType,
+    storageKey: media.storageKey || null,
+    storedPath,
+    publicUrl,
+  });
+
+  return publicUrl;
+};
+
+// Only allow a filename, not a directory path.
+const pathSafeFileName = (value) => {
+  const normalized = String(value).replace(/\\/g, "/");
+  const fileName = normalized.split("/").pop();
+
+  if (
+    !fileName ||
+    fileName === "." ||
+    fileName === ".." ||
+    fileName.includes("\0")
+  ) {
+    throw new Error("Invalid media filename");
+  }
+
+  return fileName;
+};
+
+// ======================================================
+// GET PUBLIC IMAGE URL
+// ======================================================
+
+const getPublicImageUrl = (media) => {
   if (!Array.isArray(media) || media.length === 0) {
     throw new Error("This order has no uploaded media");
   }
 
-  // Find an image using MIME type, media type, or file extension.
   const image = media.find((item) => {
     const mimeType = String(
       item.mimeType || item.mimetype || item.mime_type || ""
@@ -209,15 +356,15 @@ const getPublicImageUrl = (media) => {
 
     const mediaType = String(
       item.mediaType || item.fileType || item.type || ""
-    ).toLowerCase();
+    ).toUpperCase();
 
     const filePath = String(
       item.fileUrl || item.filePath || item.url || item.path || ""
     );
 
     return (
+      mediaType === "IMAGE" ||
       mimeType.startsWith("image/") ||
-      mediaType === "image" ||
       /\.(jpe?g|png|webp|gif)(?:\?.*)?$/i.test(filePath)
     );
   });
@@ -226,51 +373,14 @@ const getPublicImageUrl = (media) => {
     throw new Error("No image found in this order's media");
   }
 
-  const filePath =
-    image.fileUrl ||
-    image.filePath ||
-    image.url ||
-    image.path;
-
-  if (!filePath) {
-    throw new Error("Order image file path is missing");
-  }
-
-  // If the stored URL is already absolute, preserve it.
-  if (/^https:\/\//i.test(filePath)) {
-    return filePath;
-  }
-
-  // Convert a relative upload path into a public HTTPS URL.
-  const relativePath = String(filePath)
-    .replace(/\\/g, "/")
-    .replace(/^\/+/, "");
-
-  const imageUrl = `${baseUrl}/${relativePath}`;
-
-  console.log("ORDER IMAGE URL GENERATED:", {
-    imageId: image.id || null,
-    orderImagePath: relativePath,
-    imageUrl,
-  });
-
-  return imageUrl;
+  return buildPublicMediaUrl(image, "IMAGE");
 };
-
 
 // ======================================================
 // GET PUBLIC VIDEO URL
 // ======================================================
 
 const getPublicVideoUrl = (media) => {
-  const baseUrl = process.env.PUBLIC_BASE_URL?.replace(/\/+$/, "");
-
-  if (!baseUrl || !/^https:\/\//i.test(baseUrl)) {
-    throw new Error(
-      "PUBLIC_BASE_URL must be configured with a public HTTPS URL"
-    );
-  }
-
   if (!Array.isArray(media) || media.length === 0) {
     throw new Error("This order has no uploaded media");
   }
@@ -289,8 +399,8 @@ const getPublicVideoUrl = (media) => {
     );
 
     return (
-      mimeType.startsWith("video/") ||
       mediaType === "VIDEO" ||
+      mimeType.startsWith("video/") ||
       /\.(mp4|3gp|mov|m4v|webm)(?:\?.*)?$/i.test(filePath)
     );
   });
@@ -299,40 +409,13 @@ const getPublicVideoUrl = (media) => {
     throw new Error("No video found in this order's media");
   }
 
-  const filePath =
-    video.fileUrl ||
-    video.filePath ||
-    video.url ||
-    video.path;
-
-  if (!filePath) {
-    throw new Error("Order video file path is missing");
-  }
-
-  let videoUrl;
-
-  if (/^https:\/\//i.test(filePath)) {
-    videoUrl = filePath;
-  } else {
-    const relativePath = String(filePath)
-      .replace(/\\/g, "/")
-      .replace(/^\/+/, "");
-
-    videoUrl = `${baseUrl}/${relativePath}`;
-  }
-
-  console.log("ORDER VIDEO URL GENERATED:", {
-    mediaId: video.id || null,
-    videoPath: filePath,
-    videoUrl,
-  });
-
-  return videoUrl;
+  return buildPublicMediaUrl(video, "VIDEO");
 };
 
 // ======================================================
 // SEND ORDER IMAGE TEMPLATE TO MAKER
 // ======================================================
+
 export const sendOrderImageToMaker = async (order) => {
   if (!order) {
     throw new Error("Order not found");
@@ -353,7 +436,6 @@ export const sendOrderImageToMaker = async (order) => {
   }
 
   const to = getPhoneNumber(order.maker);
-
   const imageUrl = getPublicImageUrl(order.media);
 
   const language =
@@ -365,11 +447,8 @@ export const sendOrderImageToMaker = async (order) => {
     language,
     orderNumber: order.orderNumber,
     imageUrl,
-    bodyParameterCount: 1,
   });
 
-  // This function must use the exact image-header field expected by
-  // the SMS-MOJO API. Confirm its request schema before production use.
   return sendWhatsAppImageTemplate({
     to,
     templateId,
@@ -378,7 +457,6 @@ export const sendOrderImageToMaker = async (order) => {
     imageUrl,
   });
 };
-
 
 // ======================================================
 // SEND ORDER VIDEO TEMPLATE TO MAKER

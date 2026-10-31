@@ -6,6 +6,36 @@ import prisma from "../config/database.js";
 import { generateOrderNumber } from "../utils/orderNumber.js";
 
 // ============================================================
+// UPLOAD CONFIGURATION
+// ============================================================
+
+const UPLOAD_DIR = path.resolve(
+  process.env.UPLOAD_DIR || path.join(process.cwd(), "uploads")
+);
+
+const getUploadFolder = (mediaType) => {
+  const folders = {
+    IMAGE: "images",
+    VIDEO: "videos",
+    AUDIO: "audio",
+  };
+
+  return folders[mediaType] || null;
+};
+
+// Store the public URL path, not the physical server path.
+const getFileUrl = (file) => {
+  const mediaType = getMediaType(file.mimetype);
+  const folder = getUploadFolder(mediaType);
+
+  if (!folder || !file.filename) {
+    throw new Error("Invalid uploaded media file");
+  }
+
+  return `/uploads/${folder}/${encodeURIComponent(file.filename)}`;
+};
+
+// ============================================================
 // HELPERS
 // ============================================================
 
@@ -70,14 +100,6 @@ const getMediaContext = (orderType, mediaType) => {
   return "ORDER";
 };
 
-const getFileUrl = (file) => {
-  const relativePath = path
-    .relative(process.cwd(), file.path)
-    .replaceAll("\\", "/");
-
-  return `/${relativePath}`;
-};
-
 const toNumberOrNull = (value) =>
   value !== undefined && value !== null && value !== ""
     ? Number(value)
@@ -96,7 +118,37 @@ const ORDER_INCLUDE = {
   media: true,
 };
 
-// Used by the controller to remove uploaded files when a request fails
+// ============================================================
+// SAFE PHYSICAL FILE PATH
+// ============================================================
+
+const getPhysicalMediaPath = (media) => {
+  const folder = getUploadFolder(media.mediaType);
+
+  if (!folder || !media.storageKey) {
+    return null;
+  }
+
+  // Only use the filename, never trust a stored directory path.
+  const fileName = path.basename(media.storageKey);
+
+  const filePath = path.resolve(UPLOAD_DIR, folder, fileName);
+  const allowedDirectory = path.resolve(UPLOAD_DIR, folder);
+
+  if (
+    filePath !== allowedDirectory &&
+    !filePath.startsWith(allowedDirectory + path.sep)
+  ) {
+    throw new Error("Invalid media storage path");
+  }
+
+  return filePath;
+};
+
+// ============================================================
+// CLEANUP UPLOADED FILES
+// ============================================================
+
 export const cleanupUploadedFiles = async (files = []) => {
   for (const file of files) {
     try {
@@ -109,7 +161,6 @@ export const cleanupUploadedFiles = async (files = []) => {
 
 // ============================================================
 // CREATE ORDER
-// Media is optional.
 // ============================================================
 
 export const createOrder = async (data, files = []) => {
@@ -120,37 +171,25 @@ export const createOrder = async (data, files = []) => {
     customerName,
     customerPhone,
     customerArea,
-
     orderType,
-
     expectedDeliveryDate,
     priority,
-
     advance,
     estimate,
-
     makerId,
-
     metalId,
     categoryId,
-
     length,
     lengthUnit,
     size,
     weight,
     purity,
     description,
-
     existingJewelleryDescription,
     problemDescription,
     receivedItemDescription,
-
     repairTypeIds,
   } = data;
-
-  // ----------------------------------------------------------
-  // BASIC VALIDATION (no DB)
-  // ----------------------------------------------------------
 
   if (!branchId) throw new Error("Branch is required");
   if (!customerName?.trim()) throw new Error("Customer name is required");
@@ -165,9 +204,6 @@ export const createOrder = async (data, files = []) => {
   if (!expectedDeliveryDate) {
     throw new Error("Expected delivery date is required");
   }
-
-  // Image / Video / Audio are optional.
-  // Order can be created without any media.
 
   if (orderType === "NEW") {
     if (!metalId) throw new Error("Metal is required for new order");
@@ -196,10 +232,6 @@ export const createOrder = async (data, files = []) => {
 
   const finalLengthUnit = normalizeLengthUnit(lengthUnit);
   const finalPurity = normalizePurity(purity);
-
-  // ----------------------------------------------------------
-  // PARALLEL DB VERIFICATION
-  // ----------------------------------------------------------
 
   const [branch, metal, category, maker, repairTypes] =
     await Promise.all([
@@ -246,11 +278,10 @@ export const createOrder = async (data, files = []) => {
 
   console.log("CREATE ORDER VALIDATION ms =>", Date.now() - t0);
 
-  // Generated after validation so failed requests never use a number
   const orderNumber = await generateOrderNumber();
 
   // ----------------------------------------------------------
-  // MEDIA (OPTIONAL)
+  // MEDIA
   // ----------------------------------------------------------
 
   const mediaData = files.map((file) => {
@@ -274,7 +305,6 @@ export const createOrder = async (data, files = []) => {
   const order = await prisma.order.create({
     data: {
       orderNumber,
-
       branchId: Number(branchId),
 
       customerName: customerName.trim(),
@@ -316,7 +346,6 @@ export const createOrder = async (data, files = []) => {
 
       receivedItemDescription: receivedItemDescription?.trim() || null,
 
-      // No media = skip nested media creation
       media:
         mediaData.length > 0
           ? {
@@ -359,6 +388,7 @@ export const getOrders = async ({
   makerId,
 }) => {
   const currentPage = Math.max(Number(page) || 1, 1);
+
   const currentLimit = Math.min(
     Math.max(Number(limit) || 10, 1),
     100
@@ -367,7 +397,6 @@ export const getOrders = async ({
   const skip = (currentPage - 1) * currentLimit;
   const where = {};
 
-  // Order type filter
   if (orderType) {
     if (!["NEW", "REPAIR"].includes(orderType)) {
       throw new Error("Invalid order type");
@@ -376,7 +405,6 @@ export const getOrders = async ({
     where.orderType = orderType;
   }
 
-  // Status filter
   if (status) {
     const allowedStatuses = [
       "DRAFT",
@@ -386,7 +414,6 @@ export const getOrders = async ({
       "COMPLETED",
       "FINAL_CONFIRMED",
       "DELIVERED",
-      // "CLEANUP",
       "ON_HOLD",
       "CANCELLED",
     ];
@@ -398,7 +425,6 @@ export const getOrders = async ({
     where.status = status;
   }
 
-  // Branch filter
   if (branchId !== undefined && branchId !== null && branchId !== "") {
     const parsedBranchId = Number(branchId);
 
@@ -409,7 +435,6 @@ export const getOrders = async ({
     where.branchId = parsedBranchId;
   }
 
-  // Maker filter
   if (makerId !== undefined && makerId !== null && makerId !== "") {
     const parsedMakerId = Number(makerId);
 
@@ -420,7 +445,6 @@ export const getOrders = async ({
     where.makerId = parsedMakerId;
   }
 
-  // Priority filter
   if (priority) {
     if (!["NORMAL", "URGENT"].includes(priority)) {
       throw new Error("Invalid priority");
@@ -429,9 +453,6 @@ export const getOrders = async ({
     where.priority = priority;
   }
 
-  // Order Created Date filter.
-  // Date inputs are interpreted using India Standard Time (UTC+05:30).
-  // Both boundary dates are inclusive.
   if (fromDate || toDate) {
     const createdAt = {};
 
@@ -451,7 +472,6 @@ export const getOrders = async ({
         throw new Error(`Invalid ${label}`);
       }
 
-      // Reject impossible dates such as 2026-02-31.
       const [year, month, day] = value.split("-").map(Number);
       const check = new Date(Date.UTC(year, month - 1, day));
 
@@ -485,7 +505,6 @@ export const getOrders = async ({
     where.createdAt = createdAt;
   }
 
-  // Search by order number, customer name, phone, or area.
   if (search?.trim()) {
     const searchText = search.trim();
 
@@ -509,15 +528,13 @@ export const getOrders = async ({
     prisma.order.count({ where }),
   ]);
 
-  const totalPages = Math.ceil(total / currentLimit);
-
   return {
     orders,
     pagination: {
       page: currentPage,
       limit: currentLimit,
       total,
-      totalPages,
+      totalPages: Math.ceil(total / currentLimit),
     },
   };
 };
@@ -547,7 +564,6 @@ export const getOrderById = async (orderId) => {
 
 // ============================================================
 // UPDATE ORDER
-// Media is optional. Existing media is preserved.
 // ============================================================
 
 export const updateOrder = async (orderId, data, files = []) => {
@@ -576,37 +592,25 @@ export const updateOrder = async (orderId, data, files = []) => {
     customerName,
     customerPhone,
     customerArea,
-
     orderType,
-
     expectedDeliveryDate,
     priority,
-
     advance,
     estimate,
-
     makerId,
-
     metalId,
     categoryId,
-
     length,
     lengthUnit,
     size,
     weight,
     purity,
     description,
-
     existingJewelleryDescription,
     problemDescription,
     receivedItemDescription,
-
     repairTypeIds,
   } = data;
-
-  // ----------------------------------------------------------
-  // FINAL VALUES + VALIDATION (no DB)
-  // ----------------------------------------------------------
 
   const finalOrderType = orderType || existingOrder.orderType;
 
@@ -726,7 +730,7 @@ export const updateOrder = async (orderId, data, files = []) => {
   }
 
   // ----------------------------------------------------------
-  // NEW MEDIA (OPTIONAL)
+  // NEW MEDIA
   // ----------------------------------------------------------
 
   const mediaData = files.map((file) => {
@@ -743,11 +747,8 @@ export const updateOrder = async (orderId, data, files = []) => {
     };
   });
 
-  // No image validation here.
-  // Existing media is preserved when no new media is uploaded.
-
   // ----------------------------------------------------------
-  // PARALLEL DB VERIFICATION
+  // DB VERIFICATION
   // ----------------------------------------------------------
 
   const [branch, metal, category, maker, repairTypes] =
@@ -893,7 +894,6 @@ export const updateOrder = async (orderId, data, files = []) => {
       },
     });
 
-    // Repair types
     await tx.orderRepairType.deleteMany({
       where: { orderId: id },
     });
@@ -907,8 +907,6 @@ export const updateOrder = async (orderId, data, files = []) => {
       });
     }
 
-    // New media
-    // If no new media is uploaded, existing media remains unchanged.
     if (mediaData.length > 0) {
       await tx.orderMedia.createMany({
         data: mediaData.map((media) => ({
@@ -963,33 +961,24 @@ export const deleteOrder = async (orderId) => {
     });
   });
 
-  // Delete physical files
+  // Delete files from permanent UPLOAD_DIR.
   for (const media of order.media) {
-    if (!media.storageKey) {
-      continue;
-    }
-
-    let folder = "";
-
-    if (media.mediaType === "IMAGE") {
-      folder = "images";
-    } else if (media.mediaType === "VIDEO") {
-      folder = "videos";
-    } else if (media.mediaType === "AUDIO") {
-      folder = "audio";
-    }
-
-    if (!folder) {
-      continue;
-    }
-
-    const filePath = path.resolve("uploads", folder, media.storageKey);
-
     try {
+      const filePath = getPhysicalMediaPath(media);
+
+      if (!filePath) {
+        continue;
+      }
+
       await fs.unlink(filePath);
-      console.log(`MEDIA DELETED => ${filePath}`);
+
+      console.log("MEDIA DELETED =>", filePath);
     } catch (error) {
-      console.error(`MEDIA DELETE ERROR => ${filePath}`, error.message);
+      console.error(
+        "MEDIA DELETE ERROR =>",
+        media.storageKey,
+        error.message
+      );
     }
   }
 

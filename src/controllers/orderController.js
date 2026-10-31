@@ -1,989 +1,637 @@
 
-import fs from "fs/promises";
-import path from "path";
+import {
+  createOrder,
+  getOrders,
+  getOrderById,
+  updateOrder,
+  deleteOrder,
+  cleanupUploadedFiles,
+} from "../services/orderService.js";
 
-import prisma from "../config/database.js";
-import { generateOrderNumber } from "../utils/orderNumber.js";
+import {
+  sendNewOrderToMaker,
+  sendRepairOrderToMaker,
+  sendOrderImageToMaker,
+  sendOrderVideoToMaker,
+} from "../services/makerWhatsAppService.js";
 
-// ============================================================
-// UPLOAD CONFIGURATION
-// ============================================================
-
-const UPLOAD_DIR = path.resolve(
-  process.env.UPLOAD_DIR || path.join(process.cwd(), "uploads")
-);
-
-const getUploadFolder = (mediaType) => {
-  const folders = {
-    IMAGE: "images",
-    VIDEO: "videos",
-    AUDIO: "audio",
-  };
-
-  return folders[mediaType] || null;
-};
-
-// Store the public URL path, not the physical server path.
-const getFileUrl = (file) => {
-  const mediaType = getMediaType(file.mimetype);
-  const folder = getUploadFolder(mediaType);
-
-  if (!folder || !file.filename) {
-    throw new Error("Invalid uploaded media file");
-  }
-
-  return `/uploads/${folder}/${encodeURIComponent(file.filename)}`;
-};
+import {
+  sendCustomerOrderConfirmationTemplate,
+} from "../services/smsmojoService.js";
 
 // ============================================================
 // HELPERS
 // ============================================================
 
-const normalizeLengthUnit = (value) => {
-  if (value === undefined || value === null || value === "") {
-    return null;
+const normalizeBody = (body = {}) => {
+  const data = {};
+
+  for (const [key, value] of Object.entries(body)) {
+    data[key] = typeof value === "string" ? value.trim() : value;
   }
 
-  const unit = String(value).trim().toUpperCase();
+  const raw = data.repairTypeIds ?? data["repairTypeIds[]"];
 
-  if (unit === "INCH" || unit === "CM") {
-    return unit;
+  delete data["repairTypeIds[]"];
+
+  if (raw === undefined) {
+    return data;
   }
 
-  throw new Error("Length unit must be INCH or CM");
-};
+  let ids = raw;
 
-const normalizePurity = (value) => {
-  if (value === undefined || value === null || value === "") {
-    return null;
-  }
+  if (typeof ids === "string") {
+    const text = ids.trim();
 
-  const purity = String(value).trim().toUpperCase();
-
-  const purityMap = {
-    "18K": "K18",
-    K18: "K18",
-    "22K": "K22",
-    K22: "K22",
-    "24K": "K24",
-    K24: "K24",
-  };
-
-  if (!purityMap[purity]) {
-    throw new Error("Purity must be 18K, 22K or 24K");
-  }
-
-  return purityMap[purity];
-};
-
-const getMediaType = (mimeType) => {
-  const mime = mimeType?.toLowerCase() || "";
-
-  if (mime.startsWith("image/")) return "IMAGE";
-  if (mime.startsWith("video/")) return "VIDEO";
-  if (mime.startsWith("audio/")) return "AUDIO";
-
-  throw new Error(`Unsupported media type: ${mimeType}`);
-};
-
-const getMediaContext = (orderType, mediaType) => {
-  if (orderType === "REPAIR") {
-    if (mediaType === "IMAGE" || mediaType === "VIDEO") {
-      return "BEFORE_REPAIR";
-    }
-
-    if (mediaType === "AUDIO") {
-      return "CUSTOMER_WHATSAPP";
+    if (text.startsWith("[")) {
+      try {
+        ids = JSON.parse(text);
+      } catch {
+        throw new Error("Invalid repair type IDs");
+      }
+    } else {
+      ids = text ? text.split(",") : [];
     }
   }
 
-  return "ORDER";
+  if (!Array.isArray(ids)) {
+    ids = [ids];
+  }
+
+  data.repairTypeIds = ids
+    .map((item) => String(item).trim())
+    .filter((item) => item !== "")
+    .map((item) => {
+      const num = Number(item);
+
+      if (!Number.isInteger(num) || num <= 0) {
+        throw new Error("Invalid repair type IDs");
+      }
+
+      return num;
+    });
+
+  return data;
 };
 
-const toNumberOrNull = (value) =>
-  value !== undefined && value !== null && value !== ""
-    ? Number(value)
-    : null;
+const parseOrderId = (value) => {
+  const id = Number(value);
 
-const ORDER_INCLUDE = {
-  branch: true,
-  metal: true,
-  category: true,
-  maker: true,
-  repairTypes: {
-    include: {
-      repairType: true,
-    },
-  },
-  media: true,
-};
-
-// ============================================================
-// SAFE PHYSICAL FILE PATH
-// ============================================================
-
-const getPhysicalMediaPath = (media) => {
-  const folder = getUploadFolder(media.mediaType);
-
-  if (!folder || !media.storageKey) {
+  if (!Number.isInteger(id) || id <= 0) {
     return null;
   }
 
-  // Only use the filename, never trust a stored directory path.
-  const fileName = path.basename(media.storageKey);
-
-  const filePath = path.resolve(UPLOAD_DIR, folder, fileName);
-  const allowedDirectory = path.resolve(UPLOAD_DIR, folder);
-
-  if (
-    filePath !== allowedDirectory &&
-    !filePath.startsWith(allowedDirectory + path.sep)
-  ) {
-    throw new Error("Invalid media storage path");
-  }
-
-  return filePath;
-};
-
-// ============================================================
-// CLEANUP UPLOADED FILES
-// ============================================================
-
-export const cleanupUploadedFiles = async (files = []) => {
-  for (const file of files) {
-    try {
-      await fs.unlink(file.path);
-    } catch (error) {
-      console.error("FILE CLEANUP ERROR:", file.path, error.message);
-    }
-  }
+  return id;
 };
 
 // ============================================================
 // CREATE ORDER
+// WhatsApp is NOT sent automatically.
+// Media is optional.
 // ============================================================
 
-export const createOrder = async (data, files = []) => {
+export const createOrderController = async (req, res, next) => {
   const t0 = Date.now();
 
-  const {
-    branchId,
-    customerName,
-    customerPhone,
-    customerArea,
-    orderType,
-    expectedDeliveryDate,
-    priority,
-    advance,
-    estimate,
-    makerId,
-    metalId,
-    categoryId,
-    length,
-    lengthUnit,
-    size,
-    weight,
-    purity,
-    description,
-    existingJewelleryDescription,
-    problemDescription,
-    receivedItemDescription,
-    repairTypeIds,
-  } = data;
+  try {
+    const files = req.files || [];
 
-  if (!branchId) throw new Error("Branch is required");
-  if (!customerName?.trim()) throw new Error("Customer name is required");
-  if (!customerPhone?.trim()) throw new Error("Customer phone is required");
-  if (!customerArea?.trim()) throw new Error("Customer area is required");
-  if (!orderType) throw new Error("Order type is required");
+    console.log("CREATE ORDER BODY =>", req.body);
+    console.log(
+      "CREATE ORDER FILES =>",
+      files.map(
+        (f) => `${f.originalname} (${(f.size / 1024 / 1024).toFixed(1)} MB)`
+      )
+    );
 
-  if (!["NEW", "REPAIR"].includes(orderType)) {
-    throw new Error("Invalid order type");
+    // Order can be created with zero uploaded files.
+    const order = await createOrder(normalizeBody(req.body), files);
+
+    console.log("CREATE ORDER CONTROLLER ms =>", Date.now() - t0);
+
+    return res.status(201).json({
+      success: true,
+      message: "Order created successfully",
+      data: order,
+    });
+  } catch (error) {
+    await cleanupUploadedFiles(req.files || []);
+    return next(error);
   }
+};
 
-  if (!expectedDeliveryDate) {
-    throw new Error("Expected delivery date is required");
-  }
+// ============================================================
+// SHARE ORDER DETAILS VIA WHATSAPP
+// POST /api/orders/:id/share-whatsapp
+// ============================================================
 
-  if (orderType === "NEW") {
-    if (!metalId) throw new Error("Metal is required for new order");
-    if (!categoryId) throw new Error("Category is required for new order");
-  }
+export const shareOrderWhatsAppController = async (req, res, next) => {
+  try {
+    const orderId = parseOrderId(req.params.id);
 
-  let uniqueRepairTypeIds = [];
-
-  if (orderType === "REPAIR") {
-    if (!Array.isArray(repairTypeIds) || repairTypeIds.length === 0) {
-      throw new Error("At least one repair type is required");
+    if (!orderId) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid order ID",
+      });
     }
 
-    if (!existingJewelleryDescription?.trim()) {
-      throw new Error("Existing jewellery description is required");
+    const order = await getOrderById(orderId);
+
+    if (!["NEW", "REPAIR"].includes(order.orderType)) {
+      return res.status(400).json({
+        success: false,
+        message: "Unsupported order type for WhatsApp sharing",
+      });
     }
 
-    if (!problemDescription?.trim()) {
-      throw new Error("Problem / repair description is required");
+    if (!order.makerId || !order.maker) {
+      return res.status(400).json({
+        success: false,
+        message: "Please assign a maker before sharing this order",
+      });
     }
 
-    uniqueRepairTypeIds = [
-      ...new Set(repairTypeIds.map((id) => Number(id))),
-    ];
-  }
+    console.log("MANUAL WHATSAPP SHARE REQUEST =>", {
+      orderId: order.id,
+      orderNumber: order.orderNumber,
+      orderType: order.orderType,
+      makerId: order.makerId,
+    });
 
-  const finalLengthUnit = normalizeLengthUnit(lengthUnit);
-  const finalPurity = normalizePurity(purity);
+    // STEP 1: Send order details to maker
+    const result =
+      order.orderType === "NEW"
+        ? await sendNewOrderToMaker(order)
+        : await sendRepairOrderToMaker(order);
 
-  const [branch, metal, category, maker, repairTypes] =
-    await Promise.all([
-      prisma.branch.findFirst({
-        where: { id: Number(branchId), status: true },
-      }),
+    if (result?.skipped) {
+      return res.status(400).json({
+        success: false,
+        message: result.reason || "WhatsApp sharing was skipped",
+      });
+    }
 
-      metalId
-        ? prisma.metal.findFirst({
-            where: { id: Number(metalId), status: true },
-          })
-        : null,
+    console.log("MAKER WHATSAPP SHARE ACCEPTED =>", {
+      orderNumber: order.orderNumber,
+      orderType: order.orderType,
+      metaMessageId: result?.meta_message_id || null,
+    });
 
-      categoryId
-        ? prisma.category.findFirst({
-            where: { id: Number(categoryId), status: true },
-          })
-        : null,
-
-      makerId
-        ? prisma.maker.findFirst({
-            where: { id: Number(makerId), status: true },
-          })
-        : null,
-
-      orderType === "REPAIR"
-        ? prisma.repairType.findMany({
-            where: { id: { in: uniqueRepairTypeIds }, status: true },
-          })
-        : [],
-    ]);
-
-  if (!branch) throw new Error("Active branch not found");
-  if (metalId && !metal) throw new Error("Active metal not found");
-  if (categoryId && !category) throw new Error("Active category not found");
-  if (makerId && !maker) throw new Error("Active maker not found");
-
-  if (
-    orderType === "REPAIR" &&
-    repairTypes.length !== uniqueRepairTypeIds.length
-  ) {
-    throw new Error("One or more repair types are invalid");
-  }
-
-  console.log("CREATE ORDER VALIDATION ms =>", Date.now() - t0);
-
-  const orderNumber = await generateOrderNumber();
-
-  // ----------------------------------------------------------
-  // MEDIA
-  // ----------------------------------------------------------
-
-  const mediaData = files.map((file) => {
-    const mediaType = getMediaType(file.mimetype);
-
-    return {
-      mediaType,
-      mediaContext: getMediaContext(orderType, mediaType),
-      fileName: file.originalname,
-      fileUrl: getFileUrl(file),
-      storageKey: file.filename,
-      mimeType: file.mimetype,
-      fileSize: file.size,
+    // STEP 2: Send order confirmation to customer
+    let customerNotification = {
+      sent: false,
+      message: "Customer notification was not sent",
+      metaMessageId: null,
     };
-  });
 
-  // ----------------------------------------------------------
-  // CREATE
-  // ----------------------------------------------------------
+    try {
+      const customerResult = await sendCustomerOrderConfirmationTemplate({
+        to: order.customerPhone,
+        customerName: order.customerName,
+        orderNumber: order.orderNumber,
+        category: order.category?.name,
+        metal: order.metal?.name,
+        purity: order.purity,
+        weight: order.weight,
+        length: order.length,
+        lengthUnit: order.lengthUnit,
+        size: order.size,
+        description:
+          order.orderType === "REPAIR"
+            ? order.problemDescription ||
+              order.existingJewelleryDescription ||
+              order.receivedItemDescription ||
+              "Repair order received"
+            : order.description || "Thank you for choosing us!",
+      });
 
-  const order = await prisma.order.create({
-    data: {
-      orderNumber,
-      branchId: Number(branchId),
+      customerNotification = {
+        sent: true,
+        message:
+          customerResult?.message ||
+          "Customer confirmation accepted by SMSMOJO",
+        metaMessageId: customerResult?.meta_message_id || null,
+      };
 
-      customerName: customerName.trim(),
-      customerPhone: customerPhone.trim(),
-      customerArea: customerArea.trim(),
+      console.log("CUSTOMER WHATSAPP ACCEPTED =>", {
+        orderNumber: order.orderNumber,
+        metaMessageId: customerResult?.meta_message_id || null,
+      });
+    } catch (customerError) {
+      // Customer failure should not undo the successful maker message.
+      console.error(
+        "CUSTOMER WHATSAPP NOTIFICATION FAILED:",
+        customerError.message
+      );
 
-      orderType,
+      if (customerError.providerResponse) {
+        console.error(
+          "CUSTOMER SMSMOJO PROVIDER RESPONSE =>",
+          customerError.providerResponse
+        );
+      }
 
-      expectedDeliveryDate: new Date(expectedDeliveryDate),
-      priority: priority === "URGENT" ? "URGENT" : "NORMAL",
+      customerNotification = {
+        sent: false,
+        message: customerError.message,
+        metaMessageId: null,
+      };
+    }
 
-      advance: toNumberOrNull(advance),
-      estimate: toNumberOrNull(estimate),
+    // STEP 3: Return API response
+    return res.status(200).json({
+      success: true,
+      message:
+        order.orderType === "REPAIR"
+          ? "Repair order shared with maker"
+          : "New order shared with maker",
+      data: {
+        orderId: order.id,
+        orderNumber: order.orderNumber,
+        orderType: order.orderType,
 
-      makerId: makerId ? Number(makerId) : null,
+        makerNotification: {
+          sent: true,
+          message: result?.message || "Maker message accepted by SMSMOJO",
+          metaMessageId: result?.meta_message_id || null,
+        },
 
-      status: "NEW",
+        customerNotification,
+      },
+    });
+  } catch (error) {
+    console.error("MANUAL WHATSAPP SHARE FAILED:", error.message);
 
-      metalId: metalId ? Number(metalId) : null,
-      categoryId: categoryId ? Number(categoryId) : null,
+    if (error.providerResponse) {
+      console.error("SMSMOJO PROVIDER RESPONSE =>", error.providerResponse);
+    }
 
-      length: toNumberOrNull(length),
-      lengthUnit: finalLengthUnit,
+    if (error.status || error.providerResponse) {
+      return res.status(502).json({
+        success: false,
+        message: "WhatsApp provider request failed",
+        error: error.message,
+        providerResponse: error.providerResponse || null,
+      });
+    }
 
-      size:
-        size !== undefined && size !== null && size !== ""
-          ? String(size)
-          : null,
+    return next(error);
+  }
+};
 
-      weight: toNumberOrNull(weight),
-      purity: finalPurity,
+// ============================================================
+// SHARE ORDER IMAGE VIA WHATSAPP
+// POST /api/orders/:id/share-whatsapp-image
+// ============================================================
 
-      description: description?.trim() || null,
+export const shareOrderImageWhatsAppController = async (
+  req,
+  res,
+  next
+) => {
+  try {
+    const orderId = parseOrderId(req.params.id);
 
-      existingJewelleryDescription:
-        existingJewelleryDescription?.trim() || null,
+    if (!orderId) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid order ID",
+      });
+    }
 
-      problemDescription: problemDescription?.trim() || null,
+    const order = await getOrderById(orderId);
 
-      receivedItemDescription: receivedItemDescription?.trim() || null,
+    if (!order.makerId || !order.maker) {
+      return res.status(400).json({
+        success: false,
+        message: "Please assign a maker before sharing",
+      });
+    }
 
-      media:
-        mediaData.length > 0
-          ? {
-              create: mediaData,
-            }
-          : undefined,
+    const result = await sendOrderImageToMaker(order);
 
-      repairTypes:
-        orderType === "REPAIR"
-          ? {
-              create: repairTypes.map((repairType) => ({
-                repairTypeId: repairType.id,
-              })),
-            }
-          : undefined,
-    },
+    if (result?.skipped) {
+      return res.status(400).json({
+        success: false,
+        message: result.reason || "Image sharing was skipped",
+      });
+    }
 
-    include: ORDER_INCLUDE,
-  });
+    return res.status(200).json({
+      success: true,
+      message: "Order image request accepted by SMSMOJO",
+      data: {
+        orderId: order.id,
+        orderNumber: order.orderNumber,
+        metaMessageId: result?.meta_message_id || null,
+      },
+    });
+  } catch (error) {
+    console.error("ORDER IMAGE WHATSAPP FAILED:", error.message);
 
-  console.log("CREATE ORDER TOTAL ms =>", Date.now() - t0);
+    if (error.status || error.providerResponse) {
+      return res.status(502).json({
+        success: false,
+        message: "WhatsApp image sending failed",
+        error: error.message,
+        providerResponse: error.providerResponse || null,
+      });
+    }
 
-  return order;
+    return next(error);
+  }
+};
+
+// ============================================================
+// SHARE ORDER VIDEO VIA WHATSAPP
+// POST /api/orders/:id/share-whatsapp-video
+// ============================================================
+
+export const shareOrderVideoWhatsAppController = async (
+  req,
+  res,
+  next
+) => {
+  try {
+    const orderId = parseOrderId(req.params.id);
+
+    if (!orderId) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid order ID",
+      });
+    }
+
+    const order = await getOrderById(orderId);
+
+    if (!order.makerId || !order.maker) {
+      return res.status(400).json({
+        success: false,
+        message: "Please assign a maker before sharing",
+      });
+    }
+
+    // if (order.orderType !== "NEW") {
+    //   return res.status(400).json({
+    //     success: false,
+    //     message: "Video sharing is only enabled for NEW orders",
+    //   });
+    // }
+
+    const result = await sendOrderVideoToMaker(order);
+
+    if (result?.skipped) {
+      return res.status(400).json({
+        success: false,
+        message: result.reason || "Video sharing was skipped",
+      });
+    }
+
+    console.log("ORDER VIDEO SHARE ACCEPTED =>", {
+      orderId: order.id,
+      orderNumber: order.orderNumber,
+      metaMessageId: result?.meta_message_id || null,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Order video request accepted by SMSMOJO",
+      data: {
+        orderId: order.id,
+        orderNumber: order.orderNumber,
+        metaMessageId: result?.meta_message_id || null,
+        providerMessage: result?.message || null,
+      },
+    });
+  } catch (error) {
+    console.error("ORDER VIDEO WHATSAPP FAILED:", error.message);
+
+    if (error.providerResponse) {
+      console.error(
+        "SMSMOJO VIDEO PROVIDER RESPONSE =>",
+        error.providerResponse
+      );
+    }
+
+    if (error.status || error.providerResponse) {
+      return res.status(502).json({
+        success: false,
+        message: "WhatsApp video sending failed",
+        error: error.message,
+        providerResponse: error.providerResponse || null,
+      });
+    }
+
+    return next(error);
+  }
 };
 
 // ============================================================
 // GET ORDER LIST
 // ============================================================
 
-export const getOrders = async ({
-  page = 1,
-  limit = 10,
-  search,
-  orderType,
-  status,
-  branchId,
-  priority,
-  fromDate,
-  toDate,
-  makerId,
-}) => {
-  const currentPage = Math.max(Number(page) || 1, 1);
+export const getOrdersController = async (req, res, next) => {
+  try {
+    const result = await getOrders({
+      page: req.query.page,
+      limit: req.query.limit,
+      search: req.query.search,
+      orderType: req.query.orderType,
+      status: req.query.status,
+      branchId: req.query.branchId,
+      priority: req.query.priority,
 
-  const currentLimit = Math.min(
-    Math.max(Number(limit) || 10, 1),
-    100
-  );
+      // Reports filters
+      fromDate: req.query.fromDate,
+      toDate: req.query.toDate,
+      makerId: req.query.makerId,
+    });
 
-  const skip = (currentPage - 1) * currentLimit;
-  const where = {};
-
-  if (orderType) {
-    if (!["NEW", "REPAIR"].includes(orderType)) {
-      throw new Error("Invalid order type");
-    }
-
-    where.orderType = orderType;
+    return res.status(200).json({
+      success: true,
+      message: "Orders fetched successfully",
+      data: result.orders,
+      pagination: result.pagination,
+    });
+  } catch (error) {
+    return next(error);
   }
-
-  if (status) {
-    const allowedStatuses = [
-      "DRAFT",
-      "NEW",
-      "ASSIGNED",
-      "IN_PROGRESS",
-      "COMPLETED",
-      "FINAL_CONFIRMED",
-      "DELIVERED",
-      "ON_HOLD",
-      "CANCELLED",
-    ];
-
-    if (!allowedStatuses.includes(status)) {
-      throw new Error("Invalid order status");
-    }
-
-    where.status = status;
-  }
-
-  if (branchId !== undefined && branchId !== null && branchId !== "") {
-    const parsedBranchId = Number(branchId);
-
-    if (!Number.isInteger(parsedBranchId) || parsedBranchId <= 0) {
-      throw new Error("Invalid branch ID");
-    }
-
-    where.branchId = parsedBranchId;
-  }
-
-  if (makerId !== undefined && makerId !== null && makerId !== "") {
-    const parsedMakerId = Number(makerId);
-
-    if (!Number.isInteger(parsedMakerId) || parsedMakerId <= 0) {
-      throw new Error("Invalid maker ID");
-    }
-
-    where.makerId = parsedMakerId;
-  }
-
-  if (priority) {
-    if (!["NORMAL", "URGENT"].includes(priority)) {
-      throw new Error("Invalid priority");
-    }
-
-    where.priority = priority;
-  }
-
-  if (fromDate || toDate) {
-    const createdAt = {};
-
-    const parseDate = (value, label, isEndOfDay = false) => {
-      if (
-        typeof value !== "string" ||
-        !/^\d{4}-\d{2}-\d{2}$/.test(value)
-      ) {
-        throw new Error(`Invalid ${label}. Expected YYYY-MM-DD`);
-      }
-
-      const date = new Date(
-        `${value}T${isEndOfDay ? "23:59:59.999" : "00:00:00.000"}+05:30`
-      );
-
-      if (Number.isNaN(date.getTime())) {
-        throw new Error(`Invalid ${label}`);
-      }
-
-      const [year, month, day] = value.split("-").map(Number);
-      const check = new Date(Date.UTC(year, month - 1, day));
-
-      if (
-        check.getUTCFullYear() !== year ||
-        check.getUTCMonth() !== month - 1 ||
-        check.getUTCDate() !== day
-      ) {
-        throw new Error(`Invalid ${label}`);
-      }
-
-      return date;
-    };
-
-    if (fromDate) {
-      createdAt.gte = parseDate(fromDate, "fromDate");
-    }
-
-    if (toDate) {
-      createdAt.lte = parseDate(toDate, "toDate", true);
-    }
-
-    if (
-      createdAt.gte &&
-      createdAt.lte &&
-      createdAt.gte.getTime() > createdAt.lte.getTime()
-    ) {
-      throw new Error("fromDate must be before or equal to toDate");
-    }
-
-    where.createdAt = createdAt;
-  }
-
-  if (search?.trim()) {
-    const searchText = search.trim();
-
-    where.OR = [
-      { orderNumber: { contains: searchText } },
-      { customerName: { contains: searchText } },
-      { customerPhone: { contains: searchText } },
-      { customerArea: { contains: searchText } },
-    ];
-  }
-
-  const [orders, total] = await prisma.$transaction([
-    prisma.order.findMany({
-      where,
-      skip,
-      take: currentLimit,
-      orderBy: { id: "desc" },
-      include: ORDER_INCLUDE,
-    }),
-
-    prisma.order.count({ where }),
-  ]);
-
-  return {
-    orders,
-    pagination: {
-      page: currentPage,
-      limit: currentLimit,
-      total,
-      totalPages: Math.ceil(total / currentLimit),
-    },
-  };
 };
 
 // ============================================================
 // GET ORDER DETAILS
 // ============================================================
 
-export const getOrderById = async (orderId) => {
-  const id = Number(orderId);
+export const getOrderByIdController = async (req, res, next) => {
+  try {
+    const order = await getOrderById(req.params.id);
 
-  if (!id || Number.isNaN(id)) {
-    throw new Error("Invalid order ID");
+    return res.status(200).json({
+      success: true,
+      message: "Order details fetched successfully",
+      data: order,
+    });
+  } catch (error) {
+    return next(error);
   }
-
-  const order = await prisma.order.findUnique({
-    where: { id },
-    include: ORDER_INCLUDE,
-  });
-
-  if (!order) {
-    throw new Error("Order not found");
-  }
-
-  return order;
 };
 
 // ============================================================
 // UPDATE ORDER
+// Responds right after saving. New media is sent to the maker
+// on WhatsApp in the background.
 // ============================================================
 
-export const updateOrder = async (orderId, data, files = []) => {
+// Sends WhatsApp media in the background. Never throws.
+const sendNewMediaInBackground = async (savedOrder, newMedia) => {
+  for (const media of newMedia) {
+    const mediaType = String(media.mediaType || "").toUpperCase();
+
+    try {
+      let result;
+
+      if (mediaType === "IMAGE") {
+        result = await sendOrderImageToMaker({
+          ...savedOrder,
+          media: [media],
+        });
+      } else if (mediaType === "VIDEO") {
+        result = await sendOrderVideoToMaker({
+          ...savedOrder,
+          media: [media],
+        });
+      } else {
+        console.log("UPDATED MEDIA TYPE NOT SENT:", mediaType, media.fileName);
+        continue;
+      }
+
+      if (result?.skipped) {
+        console.warn("UPDATED MEDIA WHATSAPP SKIPPED:", {
+          orderNumber: savedOrder.orderNumber,
+          fileName: media.fileName,
+          reason: result.reason,
+        });
+        continue;
+      }
+
+      console.log("UPDATED MEDIA WHATSAPP ACCEPTED:", {
+        orderNumber: savedOrder.orderNumber,
+        fileName: media.fileName,
+        mediaType,
+        metaMessageId: result?.meta_message_id || null,
+      });
+    } catch (error) {
+      console.error("UPDATED MEDIA WHATSAPP FAILED:", {
+        orderNumber: savedOrder.orderNumber,
+        fileName: media.fileName,
+        mediaType,
+        error: error.message,
+        providerResponse: error.providerResponse || null,
+      });
+    }
+  }
+};
+
+export const updateOrderController = async (req, res, next) => {
   const t0 = Date.now();
+  const uploadedFiles = req.files || [];
+  let order;
 
-  const id = Number(orderId);
+  // Step 1: save order + new media
+  try {
+    console.log("UPDATE ORDER REQUEST =>", {
+      orderId: req.params.id,
+      uploadedFileCount: uploadedFiles.length,
+      uploadedFiles: uploadedFiles.map((file) => ({
+        filename: file.filename,
+        mimetype: file.mimetype,
+        size: file.size,
+      })),
+    });
 
-  if (!id || Number.isNaN(id)) {
-    throw new Error("Invalid order ID");
+    order = await updateOrder(
+      req.params.id,
+      normalizeBody(req.body),
+      uploadedFiles
+    );
+  } catch (error) {
+    await cleanupUploadedFiles(uploadedFiles);
+    return next(error);
   }
 
-  const existingOrder = await prisma.order.findUnique({
-    where: { id },
-    include: {
-      media: true,
-      repairTypes: true,
+  // No new media: nothing to send
+  if (uploadedFiles.length === 0) {
+    return res.status(200).json({
+      success: true,
+      message: "Order updated successfully. No new media uploaded.",
+      data: order,
+      whatsapp: {
+        attempted: false,
+        results: [],
+      },
+    });
+  }
+
+  // updateOrder already returns media + maker, no extra query needed
+  const savedOrder = order;
+
+  if (!savedOrder.makerId || !savedOrder.maker) {
+    console.warn(
+      "UPDATED MEDIA NOT SENT: No maker assigned",
+      savedOrder.orderNumber
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: "Order updated successfully, but no maker is assigned.",
+      data: savedOrder,
+      whatsapp: {
+        attempted: false,
+        results: [],
+        reason: "NO_MAKER_ASSIGNED",
+      },
+    });
+  }
+
+  const uploadedKeys = new Set(uploadedFiles.map((file) => file.filename));
+
+  const newMedia = (savedOrder.media || []).filter((media) =>
+    uploadedKeys.has(media.storageKey)
+  );
+
+  console.log("UPDATE ORDER RESPONSE ms =>", Date.now() - t0);
+
+  // Step 2: respond immediately
+  res.status(200).json({
+    success: true,
+    message: "Order updated successfully. Media is being sent to the maker.",
+    data: savedOrder,
+    whatsapp: {
+      attempted: true,
+      queued: true,
+      total: newMedia.length,
     },
   });
 
-  if (!existingOrder) {
-    throw new Error("Order not found");
-  }
-
-  const {
-    branchId,
-    customerName,
-    customerPhone,
-    customerArea,
-    orderType,
-    expectedDeliveryDate,
-    priority,
-    advance,
-    estimate,
-    makerId,
-    metalId,
-    categoryId,
-    length,
-    lengthUnit,
-    size,
-    weight,
-    purity,
-    description,
-    existingJewelleryDescription,
-    problemDescription,
-    receivedItemDescription,
-    repairTypeIds,
-  } = data;
-
-  const finalOrderType = orderType || existingOrder.orderType;
-
-  if (!["NEW", "REPAIR"].includes(finalOrderType)) {
-    throw new Error("Invalid order type");
-  }
-
-  const finalBranchId =
-    branchId !== undefined ? Number(branchId) : existingOrder.branchId;
-
-  const finalCustomerName =
-    customerName !== undefined
-      ? customerName.trim()
-      : existingOrder.customerName;
-
-  const finalCustomerPhone =
-    customerPhone !== undefined
-      ? customerPhone.trim()
-      : existingOrder.customerPhone;
-
-  const finalCustomerArea =
-    customerArea !== undefined
-      ? customerArea.trim()
-      : existingOrder.customerArea;
-
-  const finalDeliveryDate =
-    expectedDeliveryDate !== undefined
-      ? expectedDeliveryDate
-      : existingOrder.expectedDeliveryDate;
-
-  if (!finalBranchId) throw new Error("Branch is required");
-  if (!finalCustomerName) throw new Error("Customer name is required");
-  if (!finalCustomerPhone) throw new Error("Customer phone is required");
-  if (!finalCustomerArea) throw new Error("Customer area is required");
-
-  if (!finalDeliveryDate) {
-    throw new Error("Expected delivery date is required");
-  }
-
-  const finalLengthUnit =
-    lengthUnit !== undefined
-      ? normalizeLengthUnit(lengthUnit)
-      : existingOrder.lengthUnit;
-
-  const finalPurity =
-    purity !== undefined ? normalizePurity(purity) : existingOrder.purity;
-
-  const finalMetalId =
-    metalId !== undefined
-      ? metalId
-        ? Number(metalId)
-        : null
-      : existingOrder.metalId;
-
-  const finalCategoryId =
-    categoryId !== undefined
-      ? categoryId
-        ? Number(categoryId)
-        : null
-      : existingOrder.categoryId;
-
-  const finalMakerId =
-    makerId !== undefined
-      ? makerId
-        ? Number(makerId)
-        : null
-      : existingOrder.makerId;
-
-  if (finalOrderType === "NEW") {
-    if (!finalMetalId) {
-      throw new Error("Metal is required for new order");
-    }
-
-    if (!finalCategoryId) {
-      throw new Error("Category is required for new order");
-    }
-  }
-
-  let finalRepairTypeIds = [];
-
-  if (finalOrderType === "REPAIR") {
-    if (repairTypeIds !== undefined) {
-      if (!Array.isArray(repairTypeIds) || repairTypeIds.length === 0) {
-        throw new Error("At least one repair type is required");
-      }
-
-      finalRepairTypeIds = [
-        ...new Set(repairTypeIds.map((item) => Number(item))),
-      ];
-    } else {
-      finalRepairTypeIds = existingOrder.repairTypes.map(
-        (item) => item.repairTypeId
-      );
-    }
-
-    if (finalRepairTypeIds.length === 0) {
-      throw new Error("At least one repair type is required");
-    }
-
-    const finalExistingJewelleryDescription =
-      existingJewelleryDescription !== undefined
-        ? existingJewelleryDescription.trim()
-        : existingOrder.existingJewelleryDescription;
-
-    const finalProblemDescription =
-      problemDescription !== undefined
-        ? problemDescription.trim()
-        : existingOrder.problemDescription;
-
-    if (!finalExistingJewelleryDescription) {
-      throw new Error("Existing jewellery description is required");
-    }
-
-    if (!finalProblemDescription) {
-      throw new Error("Problem / repair description is required");
-    }
-  }
-
-  // ----------------------------------------------------------
-  // NEW MEDIA
-  // ----------------------------------------------------------
-
-  const mediaData = files.map((file) => {
-    const mediaType = getMediaType(file.mimetype);
-
-    return {
-      mediaType,
-      mediaContext: getMediaContext(finalOrderType, mediaType),
-      fileName: file.originalname,
-      fileUrl: getFileUrl(file),
-      storageKey: file.filename,
-      mimeType: file.mimetype,
-      fileSize: file.size,
-    };
-  });
-
-  // ----------------------------------------------------------
-  // DB VERIFICATION
-  // ----------------------------------------------------------
-
-  const [branch, metal, category, maker, repairTypes] =
-    await Promise.all([
-      prisma.branch.findFirst({
-        where: { id: finalBranchId, status: true },
-      }),
-
-      finalMetalId
-        ? prisma.metal.findFirst({
-            where: { id: finalMetalId, status: true },
-          })
-        : null,
-
-      finalCategoryId
-        ? prisma.category.findFirst({
-            where: { id: finalCategoryId, status: true },
-          })
-        : null,
-
-      finalMakerId
-        ? prisma.maker.findFirst({
-            where: { id: finalMakerId, status: true },
-          })
-        : null,
-
-      finalOrderType === "REPAIR"
-        ? prisma.repairType.findMany({
-            where: { id: { in: finalRepairTypeIds }, status: true },
-          })
-        : [],
-    ]);
-
-  if (!branch) throw new Error("Active branch not found");
-  if (finalMetalId && !metal) throw new Error("Active metal not found");
-
-  if (finalCategoryId && !category) {
-    throw new Error("Active category not found");
-  }
-
-  if (finalMakerId && !maker) {
-    throw new Error("Active maker not found");
-  }
-
-  if (
-    finalOrderType === "REPAIR" &&
-    repairTypes.length !== finalRepairTypeIds.length
-  ) {
-    throw new Error("One or more repair types are invalid");
-  }
-
-  console.log("UPDATE ORDER VALIDATION ms =>", Date.now() - t0);
-
-  // ----------------------------------------------------------
-  // TRANSACTION
-  // ----------------------------------------------------------
-
-  const updatedOrder = await prisma.$transaction(async (tx) => {
-    await tx.order.update({
-      where: { id },
-
-      data: {
-        branchId: finalBranchId,
-
-        customerName: finalCustomerName,
-        customerPhone: finalCustomerPhone,
-        customerArea: finalCustomerArea,
-
-        orderType: finalOrderType,
-
-        expectedDeliveryDate: new Date(finalDeliveryDate),
-
-        priority:
-          priority === "URGENT"
-            ? "URGENT"
-            : priority === "NORMAL"
-              ? "NORMAL"
-              : existingOrder.priority,
-
-        advance:
-          advance !== undefined
-            ? advance === ""
-              ? null
-              : Number(advance)
-            : existingOrder.advance,
-
-        estimate:
-          estimate !== undefined
-            ? estimate === ""
-              ? null
-              : Number(estimate)
-            : existingOrder.estimate,
-
-        makerId: finalMakerId,
-
-        metalId: finalMetalId,
-        categoryId: finalCategoryId,
-
-        length:
-          length !== undefined
-            ? length === ""
-              ? null
-              : Number(length)
-            : existingOrder.length,
-
-        lengthUnit: finalLengthUnit,
-
-        size:
-          size !== undefined
-            ? size === ""
-              ? null
-              : String(size)
-            : existingOrder.size,
-
-        weight:
-          weight !== undefined
-            ? weight === ""
-              ? null
-              : Number(weight)
-            : existingOrder.weight,
-
-        purity: finalPurity,
-
-        description:
-          description !== undefined
-            ? description.trim() || null
-            : existingOrder.description,
-
-        existingJewelleryDescription:
-          existingJewelleryDescription !== undefined
-            ? existingJewelleryDescription.trim() || null
-            : existingOrder.existingJewelleryDescription,
-
-        problemDescription:
-          problemDescription !== undefined
-            ? problemDescription.trim() || null
-            : existingOrder.problemDescription,
-
-        receivedItemDescription:
-          receivedItemDescription !== undefined
-            ? receivedItemDescription.trim() || null
-            : existingOrder.receivedItemDescription,
-      },
-    });
-
-    await tx.orderRepairType.deleteMany({
-      where: { orderId: id },
-    });
-
-    if (finalOrderType === "REPAIR") {
-      await tx.orderRepairType.createMany({
-        data: finalRepairTypeIds.map((repairTypeId) => ({
-          orderId: id,
-          repairTypeId,
-        })),
-      });
-    }
-
-    if (mediaData.length > 0) {
-      await tx.orderMedia.createMany({
-        data: mediaData.map((media) => ({
-          orderId: id,
-          ...media,
-        })),
-      });
-    }
-
-    return await tx.order.findUnique({
-      where: { id },
-      include: ORDER_INCLUDE,
-    });
-  });
-
-  console.log("UPDATE ORDER TOTAL ms =>", Date.now() - t0);
-
-  return updatedOrder;
+  // Step 3: WhatsApp in background (errors handled inside)
+  sendNewMediaInBackground(savedOrder, newMedia);
 };
 
 // ============================================================
 // DELETE ORDER
 // ============================================================
 
-export const deleteOrder = async (orderId) => {
-  const id = Number(orderId);
+export const deleteOrderController = async (req, res, next) => {
+  try {
+    const result = await deleteOrder(req.params.id);
 
-  if (!id || Number.isNaN(id)) {
-    throw new Error("Invalid order ID");
-  }
-
-  const order = await prisma.order.findUnique({
-    where: { id },
-    include: { media: true },
-  });
-
-  if (!order) {
-    throw new Error("Order not found");
-  }
-
-  await prisma.$transaction(async (tx) => {
-    await tx.orderRepairType.deleteMany({
-      where: { orderId: id },
+    return res.status(200).json({
+      success: true,
+      message: "Order deleted successfully",
+      data: result,
     });
-
-    await tx.orderMedia.deleteMany({
-      where: { orderId: id },
-    });
-
-    await tx.order.delete({
-      where: { id },
-    });
-  });
-
-  // Delete files from permanent UPLOAD_DIR.
-  for (const media of order.media) {
-    try {
-      const filePath = getPhysicalMediaPath(media);
-
-      if (!filePath) {
-        continue;
-      }
-
-      await fs.unlink(filePath);
-
-      console.log("MEDIA DELETED =>", filePath);
-    } catch (error) {
-      console.error(
-        "MEDIA DELETE ERROR =>",
-        media.storageKey,
-        error.message
-      );
-    }
+  } catch (error) {
+    return next(error);
   }
-
-  return {
-    id: order.id,
-    orderNumber: order.orderNumber,
-  };
 };

@@ -372,12 +372,12 @@ export const shareOrderVideoWhatsAppController = async (
       });
     }
 
-    if (order.orderType !== "NEW") {
-      return res.status(400).json({
-        success: false,
-        message: "Video sharing is only enabled for NEW orders",
-      });
-    }
+    // if (order.orderType !== "NEW") {
+    //   return res.status(400).json({
+    //     success: false,
+    //     message: "Video sharing is only enabled for NEW orders",
+    //   });
+    // }
 
     const result = await sendOrderVideoToMaker(order);
 

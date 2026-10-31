@@ -386,7 +386,7 @@ export const getOrders = async ({
       "COMPLETED",
       "FINAL_CONFIRMED",
       "DELIVERED",
-      "CLEANUP",
+      // "CLEANUP",
       "ON_HOLD",
       "CANCELLED",
     ];

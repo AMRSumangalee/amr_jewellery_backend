@@ -1,25 +1,37 @@
+
 import multer from "multer";
 import path from "path";
 import fs from "fs";
 
 // ============================================================
-// UPLOAD DIRECTORIES
+// PERMANENT UPLOAD DIRECTORIES
 // ============================================================
 
-const uploadRoot = path.resolve("uploads");
+// Production: UPLOAD_DIR from Hostinger environment variable.
+// Local: backend/uploads
+
+const uploadRoot = process.env.UPLOAD_DIR
+  ? path.resolve(process.env.UPLOAD_DIR)
+  : path.resolve("uploads");
 
 const imageDir = path.join(uploadRoot, "images");
 const videoDir = path.join(uploadRoot, "videos");
 const audioDir = path.join(uploadRoot, "audio");
 
-// Create folders if they don't exist
+// Create folders if they don't exist.
 [uploadRoot, imageDir, videoDir, audioDir].forEach((dir) => {
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, {
-      recursive: true,
-    });
-  }
+  fs.mkdirSync(dir, {
+    recursive: true,
+  });
 });
+
+console.log("=================================");
+console.log("MULTER PROCESS CWD:", process.cwd());
+console.log("MULTER UPLOAD ROOT:", uploadRoot);
+console.log("MULTER IMAGE PATH:", imageDir);
+console.log("MULTER VIDEO PATH:", videoDir);
+console.log("MULTER AUDIO PATH:", audioDir);
+console.log("=================================");
 
 // ============================================================
 // STORAGE
@@ -96,9 +108,7 @@ const fileFilter = (req, file, cb) => {
 
   if (!isAllowed) {
     return cb(
-      new Error(
-        `Unsupported file type: ${file.mimetype}`
-      )
+      new Error(`Unsupported file type: ${file.mimetype}`)
     );
   }
 
@@ -114,10 +124,7 @@ const upload = multer({
   fileFilter,
 
   limits: {
-    // Maximum size for each file = 50 MB
     fileSize: 50 * 1024 * 1024,
-
-    // Maximum total files in one order request
     files: 20,
   },
 });

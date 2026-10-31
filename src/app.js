@@ -1,3 +1,4 @@
+
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
@@ -16,6 +17,7 @@ import makerRoutes from "./routes/makerRoutes.js";
 import orderRoutes from "./routes/orderRoutes.js";
 import whatsappRoutes from "./routes/whatsappRoutes.js";
 import dashboardRoutes from "./routes/dashboard.routes.js";
+
 const app = express();
 
 // ========================================
@@ -24,12 +26,39 @@ const app = express();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const uploadsDirectory = path.resolve(__dirname, "..", "uploads");
+
+// Production: configure UPLOAD_DIR in Hostinger.
+// Local development: use backend/uploads.
+const uploadsDirectory = process.env.UPLOAD_DIR
+  ? path.resolve(process.env.UPLOAD_DIR)
+  : path.resolve(__dirname, "..", "uploads");
+
+const mediaDirectories = ["images", "videos", "audio"];
+
+for (const directory of mediaDirectories) {
+  fs.mkdirSync(path.join(uploadsDirectory, directory), {
+    recursive: true,
+  });
+}
 
 console.log("=================================");
 console.log("APP DIRECTORY:", __dirname);
+console.log("PROCESS CWD:", process.cwd());
+console.log("UPLOAD_DIR ENV:", process.env.UPLOAD_DIR || "NOT SET");
 console.log("UPLOADS DIRECTORY:", uploadsDirectory);
 console.log("UPLOADS DIRECTORY EXISTS:", fs.existsSync(uploadsDirectory));
+
+for (const directory of mediaDirectories) {
+  const folderPath = path.join(uploadsDirectory, directory);
+
+  console.log(
+    `${directory.toUpperCase()} DIRECTORY:`,
+    folderPath,
+    "EXISTS:",
+    fs.existsSync(folderPath)
+  );
+}
+
 console.log("=================================");
 
 // ========================================
@@ -38,11 +67,9 @@ console.log("=================================");
 
 app.use(
   helmet({
-    // Allow browser and Flutter clients to display uploaded media.
     crossOriginResourcePolicy: {
       policy: "cross-origin",
     },
-    // Allow video/audio playback without restrictive CSP headers.
     contentSecurityPolicy: false,
   })
 );
@@ -74,7 +101,6 @@ app.get("/", (req, res) => {
 
 // ========================================
 // UPLOADED MEDIA
-// IMPORTANT: Must be before the 404 handler.
 // ========================================
 
 app.use(
@@ -83,6 +109,7 @@ app.use(
     dotfiles: "deny",
     index: false,
     fallthrough: true,
+
     setHeaders: (res, filePath) => {
       const extension = path.extname(filePath).toLowerCase();
 
@@ -113,37 +140,54 @@ app.use(
   })
 );
 
-// Media diagnostic route
-app.get("/api/media-check", (req, res) => {
-  const directories = ["images", "videos", "audio"];
+// ========================================
+// MEDIA DIAGNOSTIC
+// ========================================
 
+app.get("/api/media-check", (req, res) => {
   const result = {};
 
-  for (const directory of directories) {
+  for (const directory of mediaDirectories) {
     const folderPath = path.join(uploadsDirectory, directory);
+
+    let fileCount = 0;
+
+    if (fs.existsSync(folderPath)) {
+      fileCount = fs.readdirSync(folderPath).length;
+    }
 
     result[directory] = {
       path: folderPath,
       exists: fs.existsSync(folderPath),
+      fileCount,
     };
   }
 
   res.status(200).json({
     success: true,
     message: "Media directories checked",
+    uploadsDirectory,
     data: result,
   });
 });
 
-
-app.get("/api/media-check/:filename", (req, res) => {
+app.get("/api/media-check/:type/:filename", (req, res) => {
+  const { type } = req.params;
   const filename = path.basename(req.params.filename);
 
-  const filePath = path.join(uploadsDirectory, "videos", filename);
+  if (!mediaDirectories.includes(type)) {
+    return res.status(400).json({
+      success: false,
+      message: "Invalid media type",
+    });
+  }
+
+  const filePath = path.join(uploadsDirectory, type, filename);
   const exists = fs.existsSync(filePath);
 
-  res.status(200).json({
+  return res.status(200).json({
     success: true,
+    type,
     filename,
     uploadsDirectory,
     filePath,
@@ -177,6 +221,7 @@ app.use("/api/makers", makerRoutes);
 app.use("/api/orders", orderRoutes);
 app.use("/api/whatsapp", whatsappRoutes);
 app.use("/api/dashboard", dashboardRoutes);
+
 // ========================================
 // 404
 // ========================================
